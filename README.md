@@ -22,22 +22,22 @@ Open a terminal and run:
 2. Create a Virtual Environment
 
 Set up a virtual environment to manage dependencies:
-  python -m venv venv
-  venv\Scripts\activate  # Windows
+  - python -m venv venv
+  - venv\Scripts\activate  # Windows
   # or
-  source venv/bin/activate  # macOS/Linux
+  - source venv/bin/activate  # macOS/Linux
 
 3. Install Dependencies
 
 Install the required Python packages:
-  pip install -r requirements.txt
+  - pip install -r requirements.txt
 
 4. Configure Environment Variables
 
 Create a .env file in the project root directory with the following content:
-  TELEGRAM_TOKEN=your_telegram_bot_token_here
-  OPENAI_API_KEY=your_openai_api_key_here
-  OWNER_ID=your_telegram_user_id_here
+  - TELEGRAM_TOKEN=your_telegram_bot_token_here
+  - OPENAI_API_KEY=your_openai_api_key_here
+  - OWNER_ID=your_telegram_user_id_here
 
 -TELEGRAM_TOKEN: Obtain this by creating a bot via @BotFather. Send /newbot, follow the prompts, and copy the token.
 -OPENAI_API_KEY: Generate from the OpenAI dashboard.
@@ -45,15 +45,15 @@ Create a .env file in the project root directory with the following content:
 
 5. Initialize the Database
 
-The bot uses SQLite (autopilot.db) for storage. Running the bot for the first time will create it automatically, but you can manually initialize it by running
-  python -c "from db import init_db; init_db(int(input('Enter OWNER_ID: ')))"
+The bot uses SQLite (autopilot.db) for storage. Running the bot for the first time will create it automatically, but you can manually initialize it by running :
+  - python -c "from db import init_db; init_db(int(input('Enter OWNER_ID: ')))"
 
 Enter your OWNER_ID when prompted.
 
 6. Run the Bot
 
 Start the bot with:
-  python main.py
+  - python main.py
 
 
 Testing the Bot:
