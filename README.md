@@ -15,10 +15,9 @@ Step-by-Step Installation
 1. Clone the Repository
 
 Open a terminal and run:
-  git clone https://github.com/yourusername/Telegram-AI-Human-Handoff-Bot.git
+  git clone https://github.com/ameha1/Telegram-AI-Human-Handoff-Bot.git
   cd Telegram-AI-Human-Handoff
 
-Replace yourusername with the actual GitHub username hosting the repository.
 
 2. Create a Virtual Environment
 
