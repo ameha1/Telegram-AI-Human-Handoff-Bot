@@ -11,7 +11,21 @@ async def start(update: Update, context: CallbackContext, owner_id: int) -> None
     if update.message.from_user.id != owner_id:
         await update.message.reply_text("Sorry, I'm the personal assistant for my owner. This bot clearly states that the responder is an AI.")
         return
-    await update.message.reply_text("Welcome to Autopilot AI - The Intelligent Telegram Assistant. Use commands like /setup, /busy, /available, etc. to configure.")
+    await update.message.reply_text("""
+Welcome to switchAI, your intelligent Telegram assistant! I'm here to manage your messages when you're busy. Below are the available commands:
+
+- /start: Displays this help message.
+- /busy: Set yourself as busy to enable AI message handling.
+- /available: Set yourself as available to disable AI handling.
+- /set_auto_reply <message>: Set a custom reply for new chats (e.g., /set_auto_reply Hi, I'm busy, my AI will assist!).
+- /set_threshold <Low/Medium/High>: Set sensitivity for important messages (e.g., /set_threshold Medium).
+- /set_keywords <word1,word2,...>: Set urgent keywords (e.g., /set_keywords urgent,emergency,ASAP).
+- /add_schedule <days> <start> <end>: Set busy times (e.g., /add_schedule weekdays 09:00 17:00 or /add_schedule mon,tue 08:00 12:00).
+- /set_name <name>: Set your name (e.g., /set_name Alice).
+- /set_user_info <info>: Set info about you for FAQs (e.g., /set_user_info Software engineer working on AI projects).
+
+Only the bot owner can use these commands. When busy, I'll handle messages, escalate important ones, and summarize them for you!
+    """)
 
 async def busy(update: Update, context: CallbackContext, owner_id: int) -> None:
     if update.message.from_user.id != owner_id:

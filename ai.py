@@ -34,15 +34,14 @@ def analyze_importance(messages: list, settings: dict, num_exchanges: int) -> di
     - Based on threshold: {threshold_desc} and if keywords like {','.join(keywords)} present.
     - Escalate: true/false
 
-    Output as JSON: {{"sentiment_score": float, "urgency": "low/medium/high", "intent": "str", "complex": bool, "escalate": bool}}
+    Output as a JSON string: {{"sentiment_score": float, "urgency": "low/medium/high", "intent": "str", "complex": bool, "escalate": bool}}
     """
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4",  # Revert to gpt-4 if needed
         messages=[{'role': 'user', 'content': analysis_prompt}],
-        temperature=0.0,
-        response_format={"type": "json_object"}
+        temperature=0.0
     )
-    return json.loads(response.choices[0].message.content)
+    return json.loads(response.choices[0].message.content)  # Assumes GPT-4 follows the prompt
 
 def generate_summary(conv_text: str) -> str:
     response = client.chat.completions.create(
