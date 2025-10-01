@@ -9,7 +9,7 @@ def generate_ai_response(messages: list, settings: dict) -> str:
     system_prompt = f"You are an intelligent AI assistant for {settings['user_name']}. Be natural, helpful, and human-like. Answer basic FAQs using this info: {settings['user_info']}. Ask clarifying questions if needed. Set expectations like 'I'll note this down for {settings['user_name']}.' The user is busy, so handle initial queries."
     gpt_messages = [{'role': 'system', 'content': system_prompt}] + messages[-5:]
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=gpt_messages,
         temperature=0.7
     )
@@ -34,18 +34,19 @@ def analyze_importance(messages: list, settings: dict, num_exchanges: int) -> di
     - Based on threshold: {threshold_desc} and if keywords like {','.join(keywords)} present.
     - Escalate: true/false
 
-    Output as a JSON string: {{"sentiment_score": float, "urgency": "low/medium/high", "intent": "str", "complex": bool, "escalate": bool}}
+    Output as JSON: {{"sentiment_score": float, "urgency": "low/medium/high", "intent": "str", "complex": bool, "escalate": bool}}
     """
     response = client.chat.completions.create(
-        model="gpt-4",  
+        model="gpt-4o",
         messages=[{'role': 'user', 'content': analysis_prompt}],
-        temperature=0.0
+        temperature=0.0,
+        response_format={"type": "json_object"}
     )
-    return json.loads(response.choices[0].message.content)  
+    return json.loads(response.choices[0].message.content)
 
 def generate_summary(conv_text: str) -> str:
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[{'role': 'user', 'content': f"Provide a concise summary of this conversation: {conv_text}"}],
         temperature=0.7
     )
@@ -53,7 +54,7 @@ def generate_summary(conv_text: str) -> str:
 
 def generate_key_points(conv_text: str) -> str:
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[{'role': 'user', 'content': f"Extract 2-3 key points as bullet points: {conv_text}"}],
         temperature=0.7
     )
@@ -61,7 +62,7 @@ def generate_key_points(conv_text: str) -> str:
 
 def generate_suggested_action(conv_text: str) -> str:
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[{'role': 'user', 'content': f"Suggest an action for the user: {conv_text}"}],
         temperature=0.7
     )
