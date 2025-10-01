@@ -1,4 +1,3 @@
-# main.py
 import os
 import threading
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
