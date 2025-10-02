@@ -4,8 +4,8 @@ import json
 from upstash_redis.asyncio import Redis
 from datetime import datetime, timedelta
 
-REDIS_URL = os.getenv('UPSTASH_REDIS_REST_URL')
-REDIS_TOKEN = os.getenv('UPSTASH_REDIS_REST_TOKEN')
+REDIS_URL = os.getenv('REDIS_URL')
+REDIS_TOKEN = os.getenv('KV_REST_API_TOKEN')
 redis = Redis(url=REDIS_URL, token=REDIS_TOKEN)
 
 async def init_db():
