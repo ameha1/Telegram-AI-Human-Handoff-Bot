@@ -30,6 +30,7 @@ Welcome to Autopilot AI, your intelligent Telegram assistant! I'm here to manage
 - /set_name <name>: Set your name (e.g., /set_name Alice).
 - /set_user_info <info>: Set info about you for FAQs (e.g., /set_user_info Software engineer working on AI projects).
 - /deactivate: Remove yourself as an owner and deactivate the bot for you.
+- /test_as_contact: Test the bot as a contact by specifying your own @username.
 
 When busy, I'll handle messages, escalate important ones, and summarize them for you! Your username (@{username}) is registered for contacts to reach you.
     """.format(username=username or 'unknown'))
@@ -105,17 +106,33 @@ async def set_user_info(update: Update, context: CallbackContext) -> None:
 
 async def deactivate(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
+    print(f"Received /deactivate from user_id: {user_id}")  # Debug
     conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     if not cursor.fetchone():
+        print(f"User {user_id} not found in users table")  # Debug
         await update.message.reply_text("You are not registered as an owner.")
         conn.close()
         return
+    print(f"User {user_id} found, prompting for confirmation")  # Debug
     await update.message.reply_text("Are you sure you want to deactivate the bot for yourself? This will remove you as an owner. Reply with 'YES' to confirm.")
-    # Store the intent to deactivate (simplified state management)
     cursor.execute("UPDATE users SET auto_reply = ? WHERE user_id = ?", ("DEACTIVATE_PENDING", user_id))
     conn.commit()
+    conn.close()
+
+async def test_as_contact(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT username FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        await update.message.reply_text("You are not registered as an owner.")
+        conn.close()
+        return
+    username = row[0]
+    await update.message.reply_text(f"Testing as contact. Please reply with @{username} to simulate contacting yourself.")
     conn.close()
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
@@ -149,7 +166,7 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("Hi, use commands to manage me.")
         conn.close()
         return
-    # Contact
+    # Contact (including owner testing as contact)
     contact_name = update.effective_user.full_name or f"@{update.effective_user.username}"
     contact_username = update.effective_user.username
     link = f"t.me/{contact_username}" if contact_username else f"Contact ID: {user_id}"

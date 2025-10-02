@@ -9,7 +9,7 @@ load_dotenv()
 from db import init_db
 from handlers import (
     start, busy, available, set_auto_reply, set_threshold, set_keywords,
-    add_schedule_handler, set_name, set_user_info, handle_message, deactivate
+    add_schedule_handler, set_name, set_user_info, handle_message, deactivate, test_as_contact
 )
 from utils import run_scheduler
 
@@ -33,6 +33,7 @@ def main() -> None:
     application.add_handler(CommandHandler("set_name", set_name))
     application.add_handler(CommandHandler("set_user_info", set_user_info))
     application.add_handler(CommandHandler("deactivate", deactivate)) 
+    application.add_handler(CommandHandler("test_as_contact", test_as_contact))
 
     # Message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
