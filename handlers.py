@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from telegram import Update
 from telegram.ext import CallbackContext
-from db import get_conn
+from db import get_conn, get_conversation, save_conversation
 from setting import get_user_settings, is_busy, update_user_setting, add_schedule
 from ai import generate_ai_response, analyze_importance, generate_summary, generate_key_points, generate_suggested_action
 
@@ -137,112 +137,80 @@ async def test_as_contact(update: Update, context: CallbackContext) -> None:
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    user = cursor.fetchone()
+    conn = await get_conn()
+    user = await get_user_settings(user_id)
     if user:
-        settings = {
-            'busy': user[2],
-            'auto_reply': user[3],
-            'importance_threshold': user[4],
-            'keywords': user[5],
-            'busy_schedules': user[6],
-            'user_name': user[7],
-            'user_info': user[8]
-        }
-        if settings['auto_reply'] == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
-            cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-            conn.commit()
+        if user['auto_reply'] == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
+            await conn.delete(f"users:{user_id}")
             await update.message.reply_text("You have been deactivated as an owner. Goodbye!")
-            conn.close()
             return
-        elif settings['auto_reply'] == "DEACTIVATE_PENDING":
+        elif user['auto_reply'] == "DEACTIVATE_PENDING":
             await update.message.reply_text("Deactivation cancelled. Please use /deactivate again if needed.")
-            cursor.execute("UPDATE users SET auto_reply = ? WHERE user_id = ?", ("Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries.", user_id))
-            conn.commit()
-            conn.close()
+            await conn.hset(f"users:{user_id}", "auto_reply", "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries.")
             return
         await update.message.reply_text("Hi, use commands to manage me.")
-        conn.close()
         return
     # Contact (including owner testing as contact)
     contact_name = update.effective_user.full_name or f"@{update.effective_user.username}"
     contact_username = update.effective_user.username
     link = f"t.me/{contact_username}" if contact_username else f"Contact ID: {user_id}"
 
-    cursor.execute("SELECT conversation, escalated, owner_id, state FROM conversations WHERE contact_id = ?", (user_id,))
-    conv = cursor.fetchone()
-
-    messages = [] if not conv else json.loads(conv[0])
-    escalated = 0 if not conv else conv[1]
-    owner_id = None if not conv else conv[2]
-    state = None if not conv else conv[3]
+    conv = await get_conversation(user_id)
+    messages = conv['conversation']
+    escalated = conv['escalated']
+    owner_id = conv['owner_id']
+    state = conv['state']
 
     if not conv:
         await update.message.reply_text("Hi, who are you trying to reach? Reply with @username of the person.")
         state = 'ASK_OWNER'
-        cursor.execute(
-            "INSERT INTO conversations (contact_id, conversation, started_at, state) VALUES (?, ?, ?, ?)",
-            (user_id, json.dumps(messages), datetime.now().timestamp(), state)
-        )
-        conn.commit()
-        conn.close()
+        await save_conversation(user_id, {'conversation': [], 'escalated': 0, 'owner_id': None, 'state': state, 'started_at': datetime.now().timestamp()})
         return
 
     if state == 'ASK_OWNER':
         text = update.message.text.strip()
         if text.startswith('@'):
             username = text[1:]
-            cursor.execute("SELECT user_id FROM users WHERE username = ?", (username,))
-            row = cursor.fetchone()
+            result = await conn.execute("SELECT user_id FROM users WHERE username = ?", (username,))
+            row = result.fetchone()
             if row:
                 owner_id = row[0]
-                cursor.execute("UPDATE conversations SET owner_id = ?, state = NULL WHERE contact_id = ?", (owner_id, user_id))
-                conn.commit()
-                settings = get_user_settings(owner_id)
+                await save_conversation(user_id, {'conversation': messages, 'escalated': escalated, 'owner_id': owner_id, 'state': None, 'started_at': conv.get('started_at', datetime.now().timestamp())})
+                settings = await get_user_settings(owner_id)
                 print(f"Debug: Settings for owner {owner_id}: {settings}")  # Debug output
                 auto_reply = settings.get('auto_reply', "Hi, this is the owner's AI assistant...")
                 if not isinstance(auto_reply, str):
                     auto_reply = str(auto_reply)
                 auto_reply = auto_reply.replace("[User's Name]", settings.get('user_name', 'Owner'))
                 await update.message.reply_text(auto_reply)
-                conn.close()
                 return
             else:
                 await update.message.reply_text("Sorry, username not found. Try again with @username.")
-                conn.close()
                 return
         else:
             await update.message.reply_text("Please reply with @username.")
-            conn.close()
             return
 
     # Normal contact message
     if not owner_id:
         await update.message.reply_text("Error: No owner associated. Please start over.")
-        conn.close()
         return
 
     if not is_busy(owner_id):
         await update.message.reply_text("My owner is currently available. Please contact them directly if possible.")
-        conn.close()
         return
 
     messages.append({'role': 'user', 'content': update.message.text})
-    cursor.execute("UPDATE conversations SET conversation = ? WHERE contact_id = ?", (json.dumps(messages), user_id))
-    conn.commit()
+    await save_conversation(user_id, {'conversation': messages, 'escalated': escalated, 'owner_id': owner_id, 'state': state, 'started_at': conv.get('started_at', datetime.now().timestamp())})
 
-    settings = get_user_settings(owner_id)  # Ensure fresh settings
+    settings = await get_user_settings(owner_id)  # Ensure fresh settings
     ai_reply = generate_ai_response(messages, settings)
     await update.message.reply_text(ai_reply)
     messages.append({'role': 'assistant', 'content': ai_reply})
-    cursor.execute("UPDATE conversations SET conversation = ? WHERE contact_id = ?", (json.dumps(messages), user_id))
-    conn.commit()
+    await save_conversation(user_id, {'conversation': messages, 'escalated': escalated, 'owner_id': owner_id, 'state': state, 'started_at': conv.get('started_at', datetime.now().timestamp())})
 
     # Analyze
     if escalated == 1:
-        conn.close()
         return
 
     num_exchanges = len([m for m in messages if m['role'] == 'user'])
@@ -253,10 +221,7 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
 
     if analysis['escalate'] or has_keyword:
         await escalate(context, owner_id, user_id, contact_name, link, messages)
-        cursor.execute("UPDATE conversations SET escalated = 1 WHERE contact_id = ?", (user_id,))
-        conn.commit()
-
-    conn.close()
+        await save_conversation(user_id, {'conversation': messages, 'escalated': 1, 'owner_id': owner_id, 'state': state, 'started_at': conv.get('started_at', datetime.now().timestamp())})
 
 async def escalate(context: CallbackContext, owner_id: int, contact_id: int, contact_name: str, link: str, messages: list) -> None:
     conv_text = '\n'.join([f"{msg['role']}: {msg['content']}" for msg in messages])

@@ -3,4 +3,5 @@ openai
 flask
 python-dotenv
 schedule
-gunicorn  
+gunicorn
+upstash-redis  
