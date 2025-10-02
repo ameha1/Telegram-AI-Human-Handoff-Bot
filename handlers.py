@@ -13,7 +13,8 @@ async def start(update: Update, context: CallbackContext) -> None:
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     if not cursor.fetchone():
-        cursor.execute("INSERT INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
+        cursor.execute("INSERT INTO users (user_id, username, auto_reply) VALUES (?, ?, ?)", 
+                       (user_id, username, "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries."))
         conn.commit()
     conn.close()
     await update.message.reply_text("""
@@ -28,6 +29,7 @@ Welcome to Autopilot AI, your intelligent Telegram assistant! I'm here to manage
 - /add_schedule <days> <start> <end>: Set busy times (e.g., /add_schedule weekdays 09:00 17:00 or /add_schedule mon,tue 08:00 12:00).
 - /set_name <name>: Set your name (e.g., /set_name Alice).
 - /set_user_info <info>: Set info about you for FAQs (e.g., /set_user_info Software engineer working on AI projects).
+- /deactivate: Remove yourself as an owner and deactivate the bot for you.
 
 When busy, I'll handle messages, escalate important ones, and summarize them for you! Your username (@{username}) is registered for contacts to reach you.
     """.format(username=username or 'unknown'))
@@ -101,12 +103,49 @@ async def set_user_info(update: Update, context: CallbackContext) -> None:
     update_user_setting(user_id, 'user_info', info)
     await update.message.reply_text("User info set.")
 
+async def deactivate(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    if not cursor.fetchone():
+        await update.message.reply_text("You are not registered as an owner.")
+        conn.close()
+        return
+    await update.message.reply_text("Are you sure you want to deactivate the bot for yourself? This will remove you as an owner. Reply with 'YES' to confirm.")
+    # Store the intent to deactivate (simplified state management)
+    cursor.execute("UPDATE users SET auto_reply = ? WHERE user_id = ?", ("DEACTIVATE_PENDING", user_id))
+    conn.commit()
+    conn.close()
+
 async def handle_message(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    if cursor.fetchone():
+    user = cursor.fetchone()
+    if user:
+        settings = {
+            'busy': user[2],
+            'auto_reply': user[3],
+            'importance_threshold': user[4],
+            'keywords': user[5],
+            'busy_schedules': user[6],
+            'user_name': user[7],
+            'user_info': user[8]
+        }
+        if settings['auto_reply'] == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
+            cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+            conn.commit()
+            await update.message.reply_text("You have been deactivated as an owner. Goodbye!")
+            conn.close()
+            return
+        elif settings['auto_reply'] == "DEACTIVATE_PENDING":
+            await update.message.reply_text("Deactivation cancelled. Please use /deactivate again if needed.")
+            cursor.execute("UPDATE users SET auto_reply = ? WHERE user_id = ?", ("Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries.", user_id))
+            conn.commit()
+            conn.close()
+            return
         await update.message.reply_text("Hi, use commands to manage me.")
         conn.close()
         return
@@ -145,9 +184,12 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
                 cursor.execute("UPDATE conversations SET owner_id = ?, state = NULL WHERE contact_id = ?", (owner_id, user_id))
                 conn.commit()
                 settings = get_user_settings(owner_id)
-                auto_reply = settings['auto_reply'].replace("[User's Name]", settings['user_name'])
+                print(f"Debug: Settings for owner {owner_id}: {settings}")  # Debug output
+                auto_reply = settings.get('auto_reply', "Hi, this is the owner's AI assistant...")
+                if not isinstance(auto_reply, str):
+                    auto_reply = str(auto_reply)
+                auto_reply = auto_reply.replace("[User's Name]", settings.get('user_name', 'Owner'))
                 await update.message.reply_text(auto_reply)
-                # Append the user message if desired, but since it's meta, skip
                 conn.close()
                 return
             else:
@@ -174,7 +216,7 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
     cursor.execute("UPDATE conversations SET conversation = ? WHERE contact_id = ?", (json.dumps(messages), user_id))
     conn.commit()
 
-    settings = get_user_settings(owner_id)
+    settings = get_user_settings(owner_id)  # Ensure fresh settings
     ai_reply = generate_ai_response(messages, settings)
     await update.message.reply_text(ai_reply)
     messages.append({'role': 'assistant', 'content': ai_reply})

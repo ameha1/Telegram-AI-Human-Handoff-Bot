@@ -2,22 +2,22 @@ import json
 from datetime import datetime, time as dtime
 from db import get_conn
 
-def get_user_settings(owner_id: int) -> dict:
+def get_user_settings(user_id: int) -> dict:
     conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (owner_id,))
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
         return {}
     return {
-        'busy': row[1],
-        'auto_reply': row[2],
-        'importance_threshold': row[3],
-        'keywords': row[4],
-        'busy_schedules': row[5],
-        'user_name': row[6],
-        'user_info': row[7]
+        'busy': row[2],
+        'auto_reply': str(row[3]) if row[3] is not None else "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries.",
+        'importance_threshold': row[4] if row[4] in ['Low', 'Medium', 'High'] else 'Medium',  # Default to 'Medium' if invalid
+        'keywords': row[5] if row[5] else 'urgent,emergency,ASAP,critical,deal,contract,money,help',
+        'busy_schedules': row[6] if row[6] else '[]',
+        'user_name': row[7] if row[7] else 'Owner',
+        'user_info': row[8] if row[8] else 'The owner is a professional who works on AI projects.'
     }
 
 def update_user_setting(owner_id: int, field: str, value: any):
