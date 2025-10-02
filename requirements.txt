@@ -1,4 +1,6 @@
 python-telegram-bot
 openai
-schedule
+flask
 python-dotenv
+schedule
+gunicorn  

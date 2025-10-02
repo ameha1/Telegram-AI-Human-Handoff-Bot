@@ -1,8 +1,15 @@
-# main.py (updated)
 import os
-import threading
-from dotenv import load_dotenv
+from flask import Flask, request, abort
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from dotenv import load_dotenv
+import threading
+from db import init_db
+from handlers import (
+    start, busy, available, set_auto_reply, set_threshold, set_keywords,
+    add_schedule_handler, set_name, set_user_info, handle_message, deactivate, test_as_contact
+)
+from utils import run_scheduler
 
 load_dotenv()
 
@@ -14,8 +21,11 @@ from handlers import (
 from utils import run_scheduler
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 init_db()
+app = Flask(__name__)
+application = Application.builder().token(TELEGRAM_TOKEN).build()
 
 def main() -> None:
     threading.Thread(target=run_scheduler, daemon=True).start()
@@ -43,8 +53,23 @@ def main() -> None:
 
     application.run_polling()
 
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_json().if_empty(b'')
+        update = Update.de_json(json_string, application.bot)
+        application.process_update(update)
+        return '', 200
+    else:
+        abort(403)
+
+# Initialize webhook on startup (run once manually or via curl)
+@app.route('/')
+def index():
+    return "Bot is running!"
+
 if __name__ == '__main__':
-
-    print("Bot is starting...")
-
-    main()
+    # For local testing: app.run(debug=True)
+    # Start scheduler in thread
+    threading.Thread(target=run_scheduler, daemon=True).start()
+    app.run(debug=True)
