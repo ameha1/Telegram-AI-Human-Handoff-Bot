@@ -1,4 +1,6 @@
 import os
+import logging
+import asyncio
 from flask import Flask, request, abort
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
@@ -26,6 +28,7 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 init_db()
 app = Flask(__name__)
 application = Application.builder().token(TELEGRAM_TOKEN).build()
+logging.basicConfig(level=logging.INFO)
 
 def main() -> None:
     threading.Thread(target=run_scheduler, daemon=True).start()
@@ -55,15 +58,27 @@ def main() -> None:
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_json().if_empty(b'')
-        update = Update.de_json(json_string, application.bot)
-        application.process_update(update)
-        return '', 200
-    else:
-        abort(403)
+    try:
+        json_data = request.get_json()
+        if not json_data:
+            logging.error("No JSON data in request")
+            abort(400)
+        update = Update.de_json(json_data, application.bot)
+        if update:
+            # Handle async in sync context for serverless
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(application.process_update(update))
+            loop.close()
+            logging.info(f"Processed update for chat {update.effective_chat.id}")
+            return '', 200
+        else:
+            logging.error("Failed to parse update")
+            abort(400)
+    except Exception as e:
+        logging.error(f"Webhook error: {str(e)}", exc_info=True)  # Full traceback
+        abort(500)
 
-# Initialize webhook on startup (run once manually or via curl)
 @app.route('/')
 def index():
     return "Bot is running!"
