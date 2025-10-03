@@ -53,6 +53,7 @@ run_init()
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
+        logging.info(f"Received webhook request: {request.get_json()}")
         json_data = request.get_json()
         if not json_data:
             logging.error("No JSON data in request")
