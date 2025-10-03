@@ -17,12 +17,11 @@ from handlers import (
 from utils import run_scheduler
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')  # Set as Vercel env var
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')  # Set as Render env var
 
-# Initialize logging
 logging.basicConfig(level=logging.INFO)
 
-app = Flask(__name__)
+app = Flask(__name__)  # Flask app instance named 'app'
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
 # Add handlers
@@ -39,19 +38,17 @@ application.add_handler(CommandHandler("deactivate", deactivate))
 application.add_handler(CommandHandler("test_as_contact", test_as_contact))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
 
-# Run init_db asynchronously during app startup
 async def initialize_app():
     await init_db()
     logging.info("Database initialized successfully")
 
-# Call initialize_app synchronously for Vercel
 def run_init():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(initialize_app())
     loop.close()
 
-run_init()  # Run once at startup
+run_init()
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -62,7 +59,6 @@ def webhook():
             abort(400)
         update = Update.de_json(json_data, application.bot)
         if update:
-            # Handle async in sync context
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(application.process_update(update))
@@ -81,6 +77,5 @@ def index():
     return "Bot is running!"
 
 if __name__ == '__main__':
-    # For local testing
     threading.Thread(target=run_scheduler, daemon=True).start()
     app.run(debug=True)
