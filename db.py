@@ -20,7 +20,9 @@ async def get_user_settings(user_id: int) -> dict:
 async def update_user_setting(user_id: int, key_or_dict: str | dict, value=None) -> None:
     key = f"users:{user_id}"
     if isinstance(key_or_dict, dict):
-        await redis.hmset(key, key_or_dict)
+        # Use multiple hset calls for each key-value pair
+        for k, v in key_or_dict.items():
+            await redis.hset(key, k, v)
     else:
         await redis.hset(key, key_or_dict, value)
 
@@ -35,13 +37,11 @@ async def get_conversation(user_id: int) -> dict:
 
 async def save_conversation(user_id: int, data: dict) -> None:
     key = f"conversations:{user_id}"
-    await redis.hmset(key, {
-        'conversation': json.dumps(data.get('conversation', [])),
-        'escalated': str(data.get('escalated', 0)),
-        'owner_id': str(data.get('owner_id', '')),
-        'state': json.dumps(data.get('state', '')),
-        'started_at': str(data.get('started_at', datetime.now().timestamp()))
-    })
+    await redis.hset(key, 'conversation', json.dumps(data.get('conversation', [])))
+    await redis.hset(key, 'escalated', str(data.get('escalated', 0)))
+    await redis.hset(key, 'owner_id', str(data.get('owner_id', '')))
+    await redis.hset(key, 'state', json.dumps(data.get('state', '')))
+    await redis.hset(key, 'started_at', str(data.get('started_at', datetime.now().timestamp())))
 
 async def is_busy(user_id: int) -> bool:
     settings = await get_user_settings(user_id)
