@@ -1,0 +1,30 @@
+# render.yaml
+services:
+  - type: web
+    name: telegram-ai-human-handoff-bot
+    env: python
+    buildCommand: "pip install -r requirements.txt && pip install gunicorn"
+    startCommand: "gunicorn --worker-class aiohttp.worker.GunicornWebWorker --timeout 120 main:app"
+    envVars:
+      - key: TELEGRAM_TOKEN
+        fromDatabase:
+          name: telegram-ai-human-handoff-bot
+          type: secret
+          dotEnvKey: TELEGRAM_TOKEN
+      - key: OPENAI_API_KEY
+        fromDatabase:
+          name: telegram-ai-human-handoff-bot
+          type: secret
+          dotEnvKey: OPENAI_API_KEY
+      - key: UPSTASH_REDIS_REST_URL
+        fromDatabase:
+          name: telegram-ai-human-handoff-bot
+          type: secret
+          dotEnvKey: UPSTASH_REDIS_REST_URL
+      - key: UPSTASH_REDIS_REST_TOKEN
+        fromDatabase:
+          name: telegram-ai-human-handoff-bot
+          type: secret
+          dotEnvKey: UPSTASH_REDIS_REST_TOKEN
+    regions:
+      - oregon

@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import asyncio
 import logging
 import threading
+import signal
 
 load_dotenv()
 
@@ -41,7 +42,8 @@ def run_init():
     global loop
     loop.run_until_complete(initialize_app())
 
-run_init()
+# Run initialization in a separate thread to avoid blocking
+threading.Thread(target=run_init, daemon=True).start()
 
 # Add handlers
 application.add_handler(CommandHandler("start", start))
@@ -124,7 +126,7 @@ def index():
     return render_template_string(INDEX_TEMPLATE)
 
 @app.route('/webhook', methods=['POST'])
-def webhook():
+async def webhook():
     try:
         data = request.get_json()
         logging.info(f"Received webhook data: {data}")
@@ -134,7 +136,9 @@ def webhook():
         update = Update.de_json(data, application.bot)
         if update:
             global loop
-            asyncio.run_coroutine_threadsafe(application.process_update(update), loop).result()
+            # Run process_update in the background and wait for completion
+            await loop.run_in_executor(None, lambda: asyncio.run_coroutine_threadsafe(
+                application.process_update(update), loop).result())
             logging.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
             return '', 200
         else:
@@ -144,7 +148,16 @@ def webhook():
         logging.error(f"Webhook error: {str(e)}", exc_info=True)
         abort(500)
 
+def signal_handler(sig, frame):
+    global loop
+    loop.call_soon_threadsafe(loop.stop)
+    logging.info("Shutting down event loop")
+
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 10000))
     threading.Thread(target=run_scheduler, daemon=True).start()
+    # Use a WSGI server with async support or adjust Gunicorn config
     app.run(host='0.0.0.0', port=port, debug=True)
