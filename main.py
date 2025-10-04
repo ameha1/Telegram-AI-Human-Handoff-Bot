@@ -24,8 +24,22 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Initialize the application
-application.initialize()
+async def initialize_app():
+    conn = await get_conn()
+    try:
+        await conn.ping()
+        logging.info("Redis connection established successfully")
+    except Exception as e:
+        logging.error(f"Failed to connect to Redis: {str(e)}")
+    await application.initialize()  # Await the initialization of the Telegram application
+
+def run_init():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(initialize_app())
+    loop.close()
+
+run_init()
 
 # Add handlers
 application.add_handler(CommandHandler("start", start))
@@ -40,22 +54,6 @@ application.add_handler(CommandHandler("set_user_info", set_user_info))
 application.add_handler(CommandHandler("deactivate", deactivate))
 application.add_handler(CommandHandler("test_as_contact", test_as_contact))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
-
-async def initialize_app():
-    conn = await get_conn()
-    try:
-        await conn.ping()
-        logging.info("Redis connection established successfully")
-    except Exception as e:
-        logging.error(f"Failed to connect to Redis: {str(e)}")
-
-def run_init():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(initialize_app())
-    loop.close()
-
-run_init()
 
 # HTML template for the elegant landing page
 INDEX_TEMPLATE = """
@@ -150,4 +148,3 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 10000))  # Updated to match Render's detected port
     threading.Thread(target=run_scheduler, daemon=True).start()
     app.run(host='0.0.0.0', port=port, debug=True)
-    
