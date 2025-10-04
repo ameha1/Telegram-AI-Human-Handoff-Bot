@@ -5,19 +5,19 @@ from telegram.ext import CallbackContext
 from db import get_conn, get_conversation, save_conversation
 from setting import get_user_settings, is_busy, update_user_setting, add_schedule
 from ai import generate_ai_response, analyze_importance, generate_summary, generate_key_points, generate_suggested_action
+import logging
 
 async def start(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     username = update.effective_user.username
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO users (user_id, username, auto_reply) VALUES (?, ?, ?)", 
-                       (user_id, username, "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries."))
-        conn.commit()
-    conn.close()
-    await update.message.reply_text("""
+    conn = await get_conn()
+    try:
+        result = await conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        if not result.fetchone():
+            await conn.execute("INSERT INTO users (user_id, username, auto_reply) VALUES (?, ?, ?)", 
+                               (user_id, username, "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries."))
+            await conn.commit()
+        await update.message.reply_text("""
 Welcome to Autopilot AI, your intelligent Telegram assistant! I'm here to manage your messages when you're busy. Below are the available commands:
 
 - /start: Displays this help message.
@@ -33,16 +33,19 @@ Welcome to Autopilot AI, your intelligent Telegram assistant! I'm here to manage
 - /test_as_contact: Test the bot as a contact by specifying your own @username.
 
 When busy, I'll handle messages, escalate important ones, and summarize them for you! Your username (@{username}) is registered for contacts to reach you.
-    """.format(username=username or 'unknown'))
+        """.format(username=username or 'unknown'))
+    finally:
+        # libSQL doesn't need explicit close; it's pooled
+        pass
 
 async def busy(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
-    update_user_setting(user_id, 'busy', 1)
+    await update_user_setting(user_id, 'busy', '1')
     await update.message.reply_text("You are now set as busy.")
 
 async def available(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
-    update_user_setting(user_id, 'busy', 0)
+    await update_user_setting(user_id, 'busy', '0')
     await update.message.reply_text("You are now set as available.")
 
 async def set_auto_reply(update: Update, context: CallbackContext) -> None:
@@ -51,7 +54,7 @@ async def set_auto_reply(update: Update, context: CallbackContext) -> None:
     if not message:
         await update.message.reply_text("Please provide a message.")
         return
-    update_user_setting(user_id, 'auto_reply', message)
+    await update_user_setting(user_id, 'auto_reply', message)
     await update.message.reply_text("Auto-reply message set.")
 
 async def set_threshold(update: Update, context: CallbackContext) -> None:
@@ -63,7 +66,7 @@ async def set_threshold(update: Update, context: CallbackContext) -> None:
     if threshold not in ['Low', 'Medium', 'High']:
         await update.message.reply_text("Invalid: Low, Medium, High")
         return
-    update_user_setting(user_id, 'importance_threshold', threshold)
+    await update_user_setting(user_id, 'importance_threshold', threshold)
     await update.message.reply_text(f"Importance threshold set to {threshold}.")
 
 async def set_keywords(update: Update, context: CallbackContext) -> None:
@@ -72,7 +75,7 @@ async def set_keywords(update: Update, context: CallbackContext) -> None:
     if not keywords:
         await update.message.reply_text("Please provide comma-separated keywords.")
         return
-    update_user_setting(user_id, 'keywords', keywords)
+    await update_user_setting(user_id, 'keywords', keywords)
     await update.message.reply_text("Keywords set.")
 
 async def add_schedule_handler(update: Update, context: CallbackContext) -> None:
@@ -83,7 +86,7 @@ async def add_schedule_handler(update: Update, context: CallbackContext) -> None
     days_str = context.args[0].lower()
     start = context.args[1]
     end = context.args[2]
-    add_schedule(user_id, days_str, start, end)
+    await add_schedule(user_id, days_str, start, end)
     await update.message.reply_text("Busy schedule added.")
 
 async def set_name(update: Update, context: CallbackContext) -> None:
@@ -92,7 +95,7 @@ async def set_name(update: Update, context: CallbackContext) -> None:
     if not name:
         await update.message.reply_text("Please provide a name.")
         return
-    update_user_setting(user_id, 'user_name', name)
+    await update_user_setting(user_id, 'user_name', name)
     await update.message.reply_text("User name set.")
 
 async def set_user_info(update: Update, context: CallbackContext) -> None:
@@ -101,52 +104,44 @@ async def set_user_info(update: Update, context: CallbackContext) -> None:
     if not info:
         await update.message.reply_text("Please provide user info.")
         return
-    update_user_setting(user_id, 'user_info', info)
+    await update_user_setting(user_id, 'user_info', info)
     await update.message.reply_text("User info set.")
 
 async def deactivate(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
-    print(f"Received /deactivate from user_id: {user_id}")  # Debug
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    if not cursor.fetchone():
-        print(f"User {user_id} not found in users table")  # Debug
+    logging.info(f"Received /deactivate from user_id: {user_id}")
+    settings = await get_user_settings(user_id)
+    if not settings:
+        logging.info(f"User {user_id} not found in users table")
         await update.message.reply_text("You are not registered as an owner.")
-        conn.close()
         return
-    print(f"User {user_id} found, prompting for confirmation")  # Debug
+    logging.info(f"User {user_id} found, prompting for confirmation")
     await update.message.reply_text("Are you sure you want to deactivate the bot for yourself? This will remove you as an owner. Reply with 'YES' to confirm.")
-    cursor.execute("UPDATE users SET auto_reply = ? WHERE user_id = ?", ("DEACTIVATE_PENDING", user_id))
-    conn.commit()
-    conn.close()
+    await update_user_setting(user_id, 'auto_reply', "DEACTIVATE_PENDING")
 
 async def test_as_contact(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT username FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    if not row:
+    settings = await get_user_settings(user_id)
+    if not settings:
         await update.message.reply_text("You are not registered as an owner.")
-        conn.close()
         return
-    username = row[0]
+    username = settings.get('username', update.effective_user.username)
     await update.message.reply_text(f"Testing as contact. Please reply with @{username} to simulate contacting yourself.")
-    conn.close()
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
+    logging.info(f"Handling message from user {update.effective_user.id}: {update.message.text}")
     user_id = update.effective_user.id
-    conn = await get_conn()
-    user = await get_user_settings(user_id)
-    if user:
-        if user['auto_reply'] == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
+    settings = await get_user_settings(user_id)
+    if settings:
+        logging.info(f"User {user_id} is an owner")
+        if settings['auto_reply'] == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
+            conn = await get_conn()
             await conn.delete(f"users:{user_id}")
             await update.message.reply_text("You have been deactivated as an owner. Goodbye!")
             return
-        elif user['auto_reply'] == "DEACTIVATE_PENDING":
+        elif settings['auto_reply'] == "DEACTIVATE_PENDING":
             await update.message.reply_text("Deactivation cancelled. Please use /deactivate again if needed.")
-            await conn.hset(f"users:{user_id}", "auto_reply", "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries.")
+            await update_user_setting(user_id, 'auto_reply', "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries.")
             return
         await update.message.reply_text("Hi, use commands to manage me.")
         return
@@ -177,7 +172,7 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
                 owner_id = row[0]
                 await save_conversation(user_id, {'conversation': messages, 'escalated': escalated, 'owner_id': owner_id, 'state': None, 'started_at': conv.get('started_at', datetime.now().timestamp())})
                 settings = await get_user_settings(owner_id)
-                print(f"Debug: Settings for owner {owner_id}: {settings}")  # Debug output
+                logging.info(f"Debug: Settings for owner {owner_id}: {settings}")
                 auto_reply = settings.get('auto_reply', "Hi, this is the owner's AI assistant...")
                 if not isinstance(auto_reply, str):
                     auto_reply = str(auto_reply)
@@ -196,14 +191,14 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("Error: No owner associated. Please start over.")
         return
 
-    if not is_busy(owner_id):
+    if not await is_busy(owner_id):
         await update.message.reply_text("My owner is currently available. Please contact them directly if possible.")
         return
 
     messages.append({'role': 'user', 'content': update.message.text})
     await save_conversation(user_id, {'conversation': messages, 'escalated': escalated, 'owner_id': owner_id, 'state': state, 'started_at': conv.get('started_at', datetime.now().timestamp())})
 
-    settings = await get_user_settings(owner_id)  # Ensure fresh settings
+    settings = await get_user_settings(owner_id)
     ai_reply = generate_ai_response(messages, settings)
     await update.message.reply_text(ai_reply)
     messages.append({'role': 'assistant', 'content': ai_reply})
