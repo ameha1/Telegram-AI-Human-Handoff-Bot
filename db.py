@@ -15,14 +15,13 @@ async def get_user_settings(user_id: int) -> dict:
     data = await redis.hgetall(f"users:{user_id}")
     if not data:
         return {}
-    return {k.decode('utf-8'): v.decode('utf-8') if isinstance(v, bytes) else v for k, v in data.items()}
+    return data  # Return as is since values are already strings
 
 async def update_user_setting(user_id: int, key_or_dict: str | dict, value=None) -> None:
     key = f"users:{user_id}"
     if isinstance(key_or_dict, dict):
-        # Use multiple hset calls for each key-value pair
-        for k, v in key_or_dict.items():
-            await redis.hset(key, k, v)
+        # Use hset with multiple field-value pairs in a single call
+        await redis.hset(key, mapping=key_or_dict)
     else:
         await redis.hset(key, key_or_dict, value)
 
@@ -31,17 +30,19 @@ async def get_conversation(user_id: int) -> dict:
     if not data:
         return {}
     return {
-        k.decode('utf-8'): json.loads(v.decode('utf-8')) if k.decode('utf-8') in ['conversation', 'state'] else v.decode('utf-8')
+        k: json.loads(v) if k in ['conversation', 'state'] else v
         for k, v in data.items()
     }
 
 async def save_conversation(user_id: int, data: dict) -> None:
     key = f"conversations:{user_id}"
-    await redis.hset(key, 'conversation', json.dumps(data.get('conversation', [])))
-    await redis.hset(key, 'escalated', str(data.get('escalated', 0)))
-    await redis.hset(key, 'owner_id', str(data.get('owner_id', '')))
-    await redis.hset(key, 'state', json.dumps(data.get('state', '')))
-    await redis.hset(key, 'started_at', str(data.get('started_at', datetime.now().timestamp())))
+    await redis.hset(key, mapping={
+        'conversation': json.dumps(data.get('conversation', [])),
+        'escalated': str(data.get('escalated', 0)),
+        'owner_id': str(data.get('owner_id', '')),
+        'state': json.dumps(data.get('state', '')),
+        'started_at': str(data.get('started_at', datetime.now().timestamp()))
+    })
 
 async def is_busy(user_id: int) -> bool:
     settings = await get_user_settings(user_id)
