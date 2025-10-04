@@ -24,6 +24,10 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+# Global event loop
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 async def initialize_app():
     conn = await get_conn()
     try:
@@ -31,13 +35,11 @@ async def initialize_app():
         logging.info("Redis connection established successfully")
     except Exception as e:
         logging.error(f"Failed to connect to Redis: {str(e)}")
-    await application.initialize()  # Await the initialization of the Telegram application
+    await application.initialize()
 
 def run_init():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    global loop
     loop.run_until_complete(initialize_app())
-    loop.close()
 
 run_init()
 
@@ -131,10 +133,8 @@ def webhook():
             abort(400)
         update = Update.de_json(data, application.bot)
         if update:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(application.process_update(update))
-            loop.close()
+            global loop
+            asyncio.run_coroutine_threadsafe(application.process_update(update), loop).result()
             logging.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
             return '', 200
         else:
@@ -145,6 +145,6 @@ def webhook():
         abort(500)
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 10000))  # Updated to match Render's detected port
+    port = int(os.getenv('PORT', 10000))
     threading.Thread(target=run_scheduler, daemon=True).start()
     app.run(host='0.0.0.0', port=port, debug=True)
