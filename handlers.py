@@ -31,10 +31,10 @@ Welcome to Autopilot AI, your intelligent Telegram assistant! I'm here to manage
 - /start: Displays this help message.
 - /busy: Set yourself as busy to enable AI message handling.
 - /available: Set yourself as available to disable AI handling.
-- /set_auto_reply <message>: Set a custom reply for new chats (e.g., /set_auto_reply Hi, I'm busy!).
+- /set_auto_reply <message>: Set a custom reply for new chats.
 - /set_threshold <Low/Medium/High>: Set sensitivity for important messages.
 - /set_keywords <word1,word2,...>: Set urgent keywords.
-- /add_schedule <days> <start> <end>: Set busy times (e.g., /add_schedule weekdays 09:00 17:00).
+- /add_schedule <days> <start> <end>: Set busy times.
 - /set_name <name>: Set your name.
 - /set_user_info <info>: Set info about you for FAQs.
 - /deactivate: Remove yourself as an owner.
@@ -147,7 +147,6 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("Hi, use commands to manage me.")
         return
     
-    # Contact logic
     contact_name = update.effective_user.full_name or f"@{update.effective_user.username or 'unknown'}"
     link = f"t.me/{update.effective_user.username}" if update.effective_user.username else f"Contact ID: {user_id}"
     conv = await get_conversation(user_id)
@@ -167,7 +166,7 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
             username = text[1:]
             target_settings = await get_user_settings_by_username(username)
             if target_settings:
-                owner_id = int(target_settings['user_id'])
+                owner_id = int(target_settings['user_id'])  # Assume user_id is stored
                 await save_conversation(user_id, {**conv, 'owner_id': owner_id, 'state': None})
                 auto_reply = target_settings.get('auto_reply', "Hi, this is the owner's AI assistant...")
                 await update.message.reply_text(auto_reply)

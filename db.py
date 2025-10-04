@@ -15,7 +15,6 @@ async def get_user_settings(user_id: int) -> dict:
     data = await redis.hgetall(f"users:{user_id}")
     if not data:
         return {}
-    # Convert bytes to strings and parse JSON if needed
     return {k.decode('utf-8'): v.decode('utf-8') if isinstance(v, bytes) else v for k, v in data.items()}
 
 async def update_user_setting(user_id: int, key_or_dict: str | dict, value=None) -> None:
@@ -29,15 +28,18 @@ async def get_conversation(user_id: int) -> dict:
     data = await redis.hgetall(f"conversations:{user_id}")
     if not data:
         return {}
-    return {k.decode('utf-8'): json.loads(v.decode('utf-8')) if k.decode('utf-8') in ['conversation', 'state'] else v.decode('utf-8') for k, v in data.items()}
+    return {
+        k.decode('utf-8'): json.loads(v.decode('utf-8')) if k.decode('utf-8') in ['conversation', 'state'] else v.decode('utf-8')
+        for k, v in data.items()
+    }
 
 async def save_conversation(user_id: int, data: dict) -> None:
     key = f"conversations:{user_id}"
     await redis.hmset(key, {
-        'conversation': json.dumps(data['conversation']),
-        'escalated': str(data['escalated']),
-        'owner_id': str(data['owner_id']) if data['owner_id'] else '',
-        'state': json.dumps(data['state']) if data['state'] else '',
+        'conversation': json.dumps(data.get('conversation', [])),
+        'escalated': str(data.get('escalated', 0)),
+        'owner_id': str(data.get('owner_id', '')),
+        'state': json.dumps(data.get('state', '')),
         'started_at': str(data.get('started_at', datetime.now().timestamp()))
     })
 
@@ -46,7 +48,6 @@ async def is_busy(user_id: int) -> bool:
     return settings.get('busy', '0') == '1'
 
 async def get_user_settings_by_username(username: str) -> dict:
-    # Simple scan; in production, use Redis search or a username index
     async for key in redis.scan_iter(match="users:*"):
         settings = await get_user_settings(int(key.decode('utf-8').split(':')[1]))
         if settings.get('username') == username:
