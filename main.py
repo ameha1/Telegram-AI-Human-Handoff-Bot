@@ -25,10 +25,7 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Global event loop
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
+# Initialize application in a separate thread
 async def initialize_app():
     conn = await get_conn()
     try:
@@ -39,10 +36,8 @@ async def initialize_app():
     await application.initialize()
 
 def run_init():
-    global loop
-    loop.run_until_complete(initialize_app())
+    asyncio.run(initialize_app())
 
-# Run initialization in a separate thread to avoid blocking
 threading.Thread(target=run_init, daemon=True).start()
 
 # Add handlers
@@ -122,11 +117,11 @@ INDEX_TEMPLATE = """
 """
 
 @app.route('/')
-def index():
+async def index():
     return render_template_string(INDEX_TEMPLATE)
 
 @app.route('/webhook', methods=['POST'])
-def webhook():
+async def webhook():
     try:
         data = request.get_json()
         logging.info(f"Received webhook data: {data}")
@@ -135,8 +130,7 @@ def webhook():
             abort(400)
         update = Update.de_json(data, application.bot)
         if update:
-            global loop
-            loop.run_until_complete(application.process_update(update))
+            await application.process_update(update)
             logging.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
             return '', 200
         else:
@@ -147,9 +141,8 @@ def webhook():
         abort(500)
 
 def signal_handler(sig, frame):
-    global loop
-    loop.call_soon_threadsafe(loop.stop)
-    logging.info("Shutting down event loop")
+    logging.info("Shutting down application")
+    application.shutdown()
 
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
@@ -157,4 +150,6 @@ signal.signal(signal.SIGINT, signal_handler)
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 10000))
     threading.Thread(target=run_scheduler, daemon=True).start()
-    app.run(host='0.0.0.0', port=port, debug=True)
+    # Use uvicorn as ASGI server
+    import uvicorn
+    uvicorn.run(app, host='0.0.0.0', port=port)

@@ -5,3 +5,4 @@ python-dotenv
 schedule
 gunicorn
 upstash-redis  
+uvicorn
