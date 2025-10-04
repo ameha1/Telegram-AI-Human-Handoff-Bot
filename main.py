@@ -24,6 +24,9 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+# Initialize the application
+application.initialize()
+
 # Add handlers
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("busy", busy))
@@ -50,6 +53,7 @@ def run_init():
 
 run_init()
 
+# HTML template for the elegant landing page
 INDEX_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -142,3 +146,5 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     threading.Thread(target=run_scheduler, daemon=True).start()
     app.run(host='0.0.0.0', port=port, debug=True)
+
+    
