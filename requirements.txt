@@ -1,6 +1,6 @@
 python-telegram-bot
 openai
-flask
+flask[async]
 python-dotenv
 schedule
 gunicorn

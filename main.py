@@ -126,7 +126,7 @@ def index():
     return render_template_string(INDEX_TEMPLATE)
 
 @app.route('/webhook', methods=['POST'])
-async def webhook():
+def webhook():
     try:
         data = request.get_json()
         logging.info(f"Received webhook data: {data}")
@@ -136,9 +136,7 @@ async def webhook():
         update = Update.de_json(data, application.bot)
         if update:
             global loop
-            # Run process_update in the background and wait for completion
-            await loop.run_in_executor(None, lambda: asyncio.run_coroutine_threadsafe(
-                application.process_update(update), loop).result())
+            loop.run_until_complete(application.process_update(update))
             logging.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
             return '', 200
         else:
@@ -159,5 +157,4 @@ signal.signal(signal.SIGINT, signal_handler)
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 10000))
     threading.Thread(target=run_scheduler, daemon=True).start()
-    # Use a WSGI server with async support or adjust Gunicorn config
     app.run(host='0.0.0.0', port=port, debug=True)
