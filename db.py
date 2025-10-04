@@ -1,7 +1,7 @@
 from upstash_redis.asyncio import Redis
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Redis client initialization
 redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
@@ -53,3 +53,18 @@ async def get_user_settings_by_username(username: str) -> dict:
         if settings.get('username') == username:
             return settings
     return {}
+
+async def clean_old_convs(max_age_hours: int = 24) -> int:
+    """
+    Remove conversations older than max_age_hours.
+    Returns the number of deleted conversations.
+    """
+    deleted_count = 0
+    cutoff_time = datetime.now().timestamp() - (max_age_hours * 3600)
+    async for key in redis.scan_iter(match="conversations:*"):
+        conv_data = await get_conversation(int(key.decode('utf-8').split(':')[1]))
+        started_at = float(conv_data.get('started_at', 0))
+        if started_at < cutoff_time:
+            await redis.delete(key.decode('utf-8'))
+            deleted_count += 1
+    return deleted_count
