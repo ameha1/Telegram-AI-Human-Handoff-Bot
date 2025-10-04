@@ -1,59 +1,54 @@
-# db.py (updated for Upstash Redis)
+from upstash_redis.asyncio import Redis
 import os
 import json
-from upstash_redis.asyncio import Redis
-from datetime import datetime, timedelta
+from datetime import datetime
 
-REDIS_URL = os.getenv('UPSTASH_REDIS_REST_URL')
-REDIS_TOKEN = os.getenv('UPSTASH_REDIS_REST_TOKEN')
-redis = Redis(url=REDIS_URL, token=REDIS_TOKEN)
-
-async def init_db():
-    # No schema needed for Redis; initialize defaults if missing
-    pass
+# Redis client initialization
+redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
+redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
+redis = Redis(url=redis_url, token=redis_token)
 
 async def get_conn():
-    return redis
-
-async def clean_old_convs():
-    thirty_days_ago = datetime.now().timestamp() - timedelta(days=30).total_seconds()
-    async for key in redis.scan_iter(match="conversations:*"):
-        conv_data = await redis.hgetall(key)
-        if conv_data and float(conv_data.get(b'started_at', 0)) < thirty_days_ago:
-            await redis.delete(key)
+    return redis  # Return the global Redis client
 
 async def get_user_settings(user_id: int) -> dict:
-    settings = await redis.hgetall(f"users:{user_id}")
-    if not settings:
-        return {
-            'busy': 0,
-            'auto_reply': "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries.",
-            'importance_threshold': 'Medium',
-            'keywords': 'urgent,emergency,ASAP,critical,deal,contract,money,help',
-            'busy_schedules': '[]',
-            'user_name': 'Owner',
-            'user_info': 'The owner is a professional who works on AI projects.'
-        }
-    return {k.decode(): v.decode() for k, v in settings.items()}
+    data = await redis.hgetall(f"users:{user_id}")
+    if not data:
+        return {}
+    # Convert bytes to strings and parse JSON if needed
+    return {k.decode('utf-8'): v.decode('utf-8') if isinstance(v, bytes) else v for k, v in data.items()}
 
-async def update_user_setting(user_id: int, key: str, value: str):
-    await redis.hset(f"users:{user_id}", key, value)
+async def update_user_setting(user_id: int, key_or_dict: str | dict, value=None) -> None:
+    key = f"users:{user_id}"
+    if isinstance(key_or_dict, dict):
+        await redis.hmset(key, key_or_dict)
+    else:
+        await redis.hset(key, key_or_dict, value)
 
-async def get_conversation(contact_id: int) -> dict:
-    conv_data = await redis.hgetall(f"conversations:{contact_id}")
-    if not conv_data:
-        return {'conversation': [], 'escalated': 0, 'owner_id': None, 'state': None}
-    return {
-        'conversation': json.loads(conv_data[b'conversation'].decode()) if conv_data.get(b'conversation') else [],
-        'escalated': int(conv_data.get(b'escalated', 0).decode()),
-        'owner_id': int(conv_data.get(b'owner_id', 0).decode()) if conv_data.get(b'owner_id') else None,
-        'state': conv_data.get(b'state', b'None').decode()
-    }
+async def get_conversation(user_id: int) -> dict:
+    data = await redis.hgetall(f"conversations:{user_id}")
+    if not data:
+        return {}
+    return {k.decode('utf-8'): json.loads(v.decode('utf-8')) if k.decode('utf-8') in ['conversation', 'state'] else v.decode('utf-8') for k, v in data.items()}
 
-async def save_conversation(contact_id: int, data: dict):
-    await redis.hmset(f"conversations:{contact_id}", {
+async def save_conversation(user_id: int, data: dict) -> None:
+    key = f"conversations:{user_id}"
+    await redis.hmset(key, {
         'conversation': json.dumps(data['conversation']),
-        'escalated': data['escalated'],
-        'owner_id': data['owner_id'],
-        'state': data['state']
+        'escalated': str(data['escalated']),
+        'owner_id': str(data['owner_id']) if data['owner_id'] else '',
+        'state': json.dumps(data['state']) if data['state'] else '',
+        'started_at': str(data.get('started_at', datetime.now().timestamp()))
     })
+
+async def is_busy(user_id: int) -> bool:
+    settings = await get_user_settings(user_id)
+    return settings.get('busy', '0') == '1'
+
+async def get_user_settings_by_username(username: str) -> dict:
+    # Simple scan; in production, use Redis search or a username index
+    async for key in redis.scan_iter(match="users:*"):
+        settings = await get_user_settings(int(key.decode('utf-8').split(':')[1]))
+        if settings.get('username') == username:
+            return settings
+    return {}

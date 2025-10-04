@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from telegram import Update
 from telegram.ext import CallbackContext
-from db import get_user_settings, update_user_setting, get_conversation, save_conversation, is_busy
+from db import get_user_settings, update_user_setting, get_conversation, save_conversation, is_busy, get_user_settings_by_username
 from ai import generate_ai_response, analyze_importance, generate_summary, generate_key_points, generate_suggested_action
 import logging
 
@@ -13,27 +13,35 @@ async def start(update: Update, context: CallbackContext) -> None:
     
     settings = await get_user_settings(user_id)
     if not settings:  # User not found, create new
-        await update_user_setting(user_id, 'username', username)
-        await update_user_setting(user_id, 'auto_reply', "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries.")
+        initial_settings = {
+            'username': username,
+            'auto_reply': "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries.",
+            'busy': '0',
+            'importance_threshold': 'Medium',
+            'keywords': '',
+            'user_name': '',
+            'user_info': ''
+        }
+        await update_user_setting(user_id, initial_settings)
         logging.info(f"Created new user {user_id}")
     
-    await update.message.reply_text("""
+    await update.message.reply_text(f"""
 Welcome to Autopilot AI, your intelligent Telegram assistant! I'm here to manage your messages when you're busy. Below are the available commands:
 
 - /start: Displays this help message.
 - /busy: Set yourself as busy to enable AI message handling.
 - /available: Set yourself as available to disable AI handling.
-- /set_auto_reply <message>: Set a custom reply for new chats.
+- /set_auto_reply <message>: Set a custom reply for new chats (e.g., /set_auto_reply Hi, I'm busy!).
 - /set_threshold <Low/Medium/High>: Set sensitivity for important messages.
 - /set_keywords <word1,word2,...>: Set urgent keywords.
-- /add_schedule <days> <start> <end>: Set busy times.
+- /add_schedule <days> <start> <end>: Set busy times (e.g., /add_schedule weekdays 09:00 17:00).
 - /set_name <name>: Set your name.
 - /set_user_info <info>: Set info about you for FAQs.
 - /deactivate: Remove yourself as an owner.
 - /test_as_contact: Test as a contact.
 
 Your username (@{username}) is registered for contacts to reach you.
-    """.format(username=username))
+    """)
 
 async def busy(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
@@ -61,7 +69,7 @@ async def set_threshold(update: Update, context: CallbackContext) -> None:
         return
     threshold = context.args[0].capitalize()
     if threshold not in ['Low', 'Medium', 'High']:
-        await update.message.reply_text("Invalid: Low, Medium, High")
+        await update.message.reply_text("Invalid: Low, Medium, or High")
         return
     await update_user_setting(user_id, 'importance_threshold', threshold)
     await update.message.reply_text(f"Importance threshold set to {threshold}.")
@@ -74,6 +82,18 @@ async def set_keywords(update: Update, context: CallbackContext) -> None:
         return
     await update_user_setting(user_id, 'keywords', keywords)
     await update.message.reply_text("Keywords set.")
+
+async def add_schedule_handler(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    if len(context.args) < 3:
+        await update.message.reply_text("Usage: /add_schedule weekdays 09:00 17:00 or /add_schedule mon,tue 08:00 12:00")
+        return
+    days_str = context.args[0].lower()
+    start = context.args[1]
+    end = context.args[2]
+    schedule_key = f"schedule:{user_id}"
+    await update_user_setting(user_id, 'schedule', json.dumps({'days': days_str, 'start': start, 'end': end}))
+    await update.message.reply_text("Busy schedule added.")
 
 async def set_name(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
@@ -117,8 +137,7 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
     settings = await get_user_settings(user_id)
     if settings:
         if settings.get('auto_reply') == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
-            await update_user_setting(user_id, 'auto_reply', None)  # Reset flag
-            # Note: In Redis setup, deleting the entire user hash if needed
+            await update_user_setting(user_id, None)  # Clear all settings
             await update.message.reply_text("You have been deactivated as an owner. Goodbye!")
             return
         elif settings.get('auto_reply') == "DEACTIVATE_PENDING":
@@ -128,21 +147,27 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("Hi, use commands to manage me.")
         return
     
-    # Contact logic (simplified for Redis)
+    # Contact logic
     contact_name = update.effective_user.full_name or f"@{update.effective_user.username or 'unknown'}"
+    link = f"t.me/{update.effective_user.username}" if update.effective_user.username else f"Contact ID: {user_id}"
     conv = await get_conversation(user_id)
+    if not conv:
+        await update.message.reply_text("Hi, who are you trying to reach? Reply with @username of the person.")
+        await save_conversation(user_id, {'conversation': [], 'escalated': 0, 'owner_id': None, 'state': 'ASK_OWNER', 'started_at': datetime.now().timestamp()})
+        return
+    
     messages = conv['conversation']
+    escalated = conv['escalated']
     owner_id = conv['owner_id']
     state = conv['state']
-    escalated = conv.get('escalated', 0)
     
     if state == 'ASK_OWNER':
         text = update.message.text.strip()
         if text.startswith('@'):
             username = text[1:]
-            target_settings = await get_user_settings_by_username(username)  # Implement this helper
+            target_settings = await get_user_settings_by_username(username)
             if target_settings:
-                owner_id = int(target_settings['user_id'])  # Assume stored
+                owner_id = int(target_settings['user_id'])
                 await save_conversation(user_id, {**conv, 'owner_id': owner_id, 'state': None})
                 auto_reply = target_settings.get('auto_reply', "Hi, this is the owner's AI assistant...")
                 await update.message.reply_text(auto_reply)
@@ -157,34 +182,31 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
     if not owner_id:
         await update.message.reply_text("Error: No owner associated. Please start over.")
         return
-
+    
     if not await is_busy(owner_id):
-        await update.message.reply_text("My owner is currently available. Please contact them directly if possible.")
+        await update.message.reply_text("My owner is currently available. Please contact them directly.")
         return
-
+    
     messages.append({'role': 'user', 'content': update.message.text})
-    await save_conversation(user_id, {'conversation': messages, 'escalated': escalated, 'owner_id': owner_id, 'state': state, 'started_at': conv.get('started_at', datetime.now().timestamp())})
-
+    await save_conversation(user_id, {**conv, 'conversation': messages})
+    
     settings = await get_user_settings(owner_id)
     ai_reply = generate_ai_response(messages, settings)
     await update.message.reply_text(ai_reply)
     messages.append({'role': 'assistant', 'content': ai_reply})
-    await save_conversation(user_id, {'conversation': messages, 'escalated': escalated, 'owner_id': owner_id, 'state': state, 'started_at': conv.get('started_at', datetime.now().timestamp())})
-
-    # Analyze
+    await save_conversation(user_id, {**conv, 'conversation': messages})
+    
     if escalated == 1:
         return
-
+    
     num_exchanges = len([m for m in messages if m['role'] == 'user'])
-    keywords = [kw.strip().lower() for kw in settings['keywords'].split(',')]
+    keywords = [kw.strip().lower() for kw in settings.get('keywords', '').split(',')]
     has_keyword = any(any(kw in msg['content'].lower() for kw in keywords) for msg in messages if msg['role'] == 'user')
-
+    
     analysis = analyze_importance(messages, settings, num_exchanges)
-
     if analysis['escalate'] or has_keyword:
-        link = ""  # Define link here, or generate a proper link if available
         await escalate(context, owner_id, user_id, contact_name, link, messages)
-        await save_conversation(user_id, {'conversation': messages, 'escalated': 1, 'owner_id': owner_id, 'state': state, 'started_at': conv.get('started_at', datetime.now().timestamp())})
+        await save_conversation(user_id, {**conv, 'escalated': 1})
 
 async def escalate(context: CallbackContext, owner_id: int, contact_id: int, contact_name: str, link: str, messages: list) -> None:
     conv_text = '\n'.join([f"{msg['role']}: {msg['content']}" for msg in messages])
@@ -207,14 +229,3 @@ Direct Link: {link}
 Suggested Action: {suggested}
     """
     await context.bot.send_message(chat_id=owner_id, text=notification)
-
-# Helper function to get user settings by username
-async def get_user_settings_by_username(username: str):
-    # You may need to adapt this based on your db implementation.
-    # Example for Redis: scan all users and match username
-    from db import get_all_user_settings  # You may need to implement this in db.py
-    all_users = await get_all_user_settings()
-    for user in all_users:
-        if user.get('username', '').lower() == username.lower():
-            return user
-    return None
