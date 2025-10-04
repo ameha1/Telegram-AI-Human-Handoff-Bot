@@ -24,10 +24,25 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Initialize the application
-application.initialize()
+async def initialize_app():
+    # Initialize Telegram Application
+    await application.initialize()
+    logging.info("Telegram Application initialized successfully")
+    
+    # Initialize database
+    await init_db()
+    logging.info("Database initialized successfully")
 
-# Add handlers
+def run_init():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(initialize_app())
+    loop.close()
+
+# Run initialization
+run_init()
+
+# Add handlers after initialization
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("busy", busy))
 application.add_handler(CommandHandler("available", available))
@@ -41,19 +56,7 @@ application.add_handler(CommandHandler("deactivate", deactivate))
 application.add_handler(CommandHandler("test_as_contact", test_as_contact))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
 
-async def initialize_app():
-    await init_db()
-    logging.info("Database initialized successfully")
-
-def run_init():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(initialize_app())
-    loop.close()
-
-run_init()
-
-# HTML template for the elegant landing page
+# HTML template for landing page (unchanged)
 INDEX_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -146,5 +149,3 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     threading.Thread(target=run_scheduler, daemon=True).start()
     app.run(host='0.0.0.0', port=port, debug=True)
-
-    
