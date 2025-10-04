@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, abort
+from flask import Flask, request, render_template_string, abort
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from dotenv import load_dotenv
@@ -17,11 +17,11 @@ from handlers import (
 from utils import run_scheduler
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')  # Set as Render env var
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 logging.basicConfig(level=logging.INFO)
 
-app = Flask(__name__)  # Flask app instance named 'app'
+app = Flask(__name__)
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
 # Add handlers
@@ -50,10 +50,75 @@ def run_init():
 
 run_init()
 
+INDEX_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram AI Human Handoff Bot</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f7fa;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            color: #333;
+        }
+        .container {
+            text-align: center;
+            background: white;
+            padding: 2rem 3rem;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+        }
+        h1 {
+            color: #2c3e50;
+            font-size: 2rem;
+            margin-bottom: 1rem;
+        }
+        p {
+            font-size: 1.1rem;
+            line-height: 1.5;
+            margin-bottom: 2rem;
+        }
+        a.button {
+            display: inline-block;
+            padding: 0.8rem 1.5rem;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+            transition: background-color 0.3s;
+        }
+        a.button:hover {
+            background-color: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Telegram AI Human Handoff Bot</h1>
+        <p>Enhance your productivity with an AI-powered assistant that manages Telegram messages, escalates urgent requests, and enables seamless human handoffs. Try it now!</p>
+        <a href="https://t.me/switchtoAI_bot" class="button" target="_blank">Start Chatting</a>
+    </div>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(INDEX_TEMPLATE)
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    logging.info(f"Received webhook request: {request.get_json()}")
     try:
-        logging.info(f"Received webhook request: {request.get_json()}")
         json_data = request.get_json()
         if not json_data:
             logging.error("No JSON data in request")
@@ -73,10 +138,7 @@ def webhook():
         logging.error(f"Webhook error: {str(e)}", exc_info=True)
         abort(500)
 
-@app.route('/')
-def index():
-    return "Bot is running!"
-
 if __name__ == '__main__':
+    port = int(os.getenv('PORT', 5000))
     threading.Thread(target=run_scheduler, daemon=True).start()
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=port, debug=True)
