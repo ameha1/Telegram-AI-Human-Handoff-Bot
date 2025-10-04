@@ -117,22 +117,22 @@ def index():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    logging.info(f"Received webhook request: {request.get_json()}")
     try:
-        json_data = request.get_json()
-        if not json_data:
-            logging.error("No JSON data in request")
+        data = request.get_json()
+        logging.info(f"Received webhook data: {data}")
+        if not data:
+            logging.error("No JSON data in webhook request")
             abort(400)
-        update = Update.de_json(json_data, application.bot)
+        update = Update.de_json(data, application.bot)
         if update:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(application.process_update(update))
             loop.close()
-            logging.info(f"Processed update for chat {update.effective_chat.id}")
+            logging.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
             return '', 200
         else:
-            logging.error("Failed to parse update")
+            logging.error("Failed to parse Telegram update")
             abort(400)
     except Exception as e:
         logging.error(f"Webhook error: {str(e)}", exc_info=True)
