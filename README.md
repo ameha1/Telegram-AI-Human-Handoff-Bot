@@ -37,11 +37,9 @@ Install the required Python packages:
 Create a .env file in the project root directory with the following content:
   - TELEGRAM_TOKEN=your_telegram_bot_token_here
   - OPENAI_API_KEY=your_openai_api_key_here
-  - OWNER_ID=your_telegram_user_id_here
-
+  
 -TELEGRAM_TOKEN: Obtain this by creating a bot via @BotFather. Send /newbot, follow the prompts, and copy the token.
 -OPENAI_API_KEY: Generate from the OpenAI dashboard.
--OWNER_ID: Your Telegram user ID from @userinfobot.
 
 5. Initialize the Database
 
