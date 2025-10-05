@@ -3,10 +3,10 @@ from flask import Flask, request, render_template_string, abort
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from dotenv import load_dotenv
-from handlers import setup_handlers
+import asyncio
 import logging
 import signal
-import asyncio
+import threading
 
 load_dotenv()
 
@@ -20,33 +20,26 @@ from utils import run_scheduler
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
+# Initialize Application synchronously
 async def initialize_app():
-    # Initialize Redis connection
-    redis = await get_conn()
-    logger.info("Redis connection established successfully")
-
-    # Initialize the bot application
-    application = Application.builder().token("7937730469:AAHCvwD9SMnAqjlpy5O6a5VSuu8TGHi9xoY").build()
-
-    # Set up handlers
-    setup_handlers(application)
-
-    # Start the bot
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    conn = await get_conn()
+    try:
+        await conn.ping()
+        logging.info("Redis connection established successfully")
+    except Exception as e:
+        logging.error(f"Failed to connect to Redis: {str(e)}")
     await application.initialize()
-    await application.start()
-    logger.info("Bot application started")
-
     return application
 
-# Initialize application in the main event loop
-application = asyncio.run(initialize_app())
+# Run initialization and store the application instance
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+application = loop.run_until_complete(initialize_app())
 
 # Add handlers
 application.add_handler(CommandHandler("start", start))
@@ -150,15 +143,14 @@ async def webhook():
 
 def signal_handler(sig, frame):
     logging.info("Shutting down application")
-    asyncio.run(application.shutdown())
-    # No need to stop the loop manually; Uvicorn/Gunicorn will handle it
+    application.shutdown()
+    loop.call_soon_threadsafe(loop.stop)
 
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 10000))
-    import threading
     threading.Thread(target=run_scheduler, daemon=True).start()
     import uvicorn
     uvicorn.run(app, host='0.0.0.0', port=port)
