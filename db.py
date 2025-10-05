@@ -17,9 +17,12 @@ async def get_user_settings(user_id: int) -> dict:
         return {}
     return data  # Return as is since values are already strings
 
-async def update_user_setting(user_id: int, key_or_dict: str | dict, value=None) -> None:
+async def update_user_setting(user_id: int, key_or_dict: str | dict | None, value=None) -> None:
     key = f"users:{user_id}"
-    if isinstance(key_or_dict, dict):
+    if key_or_dict is None:
+        # Clear all settings by deleting the key
+        await redis.delete(key)
+    elif isinstance(key_or_dict, dict):
         # Unpack the dictionary into key-value pairs for hset
         await redis.hset(key, **key_or_dict)
     else:
