@@ -1,7 +1,7 @@
+from upstash_redis.asyncio import Redis
 import os
 import json
 from datetime import datetime, timedelta
-from upstash_redis.asyncio import Redis
 
 # Redis client initialization
 redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
@@ -17,14 +17,11 @@ async def get_user_settings(user_id: int) -> dict:
         return {}
     return data  # Return as is since values are already strings
 
-async def update_user_setting(user_id: int, key_or_dict: str | dict | None, value=None) -> None:
+async def update_user_setting(user_id: int, key_or_dict: str | dict, value=None) -> None:
     key = f"users:{user_id}"
-    if key_or_dict is None:
-        # Clear all settings by deleting the key
-        await redis.delete(key)
-    elif isinstance(key_or_dict, dict):
-        # Unpack the dictionary into key-value pairs for hset
-        await redis.hset(key, **key_or_dict)
+    if isinstance(key_or_dict, dict):
+        for k, v in key_or_dict.items():
+            await redis.hset(key, k, v)
     else:
         await redis.hset(key, key_or_dict, value)
 
@@ -39,13 +36,16 @@ async def get_conversation(user_id: int) -> dict:
 
 async def save_conversation(user_id: int, data: dict) -> None:
     key = f"conversations:{user_id}"
-    await redis.hset(key, **{
-        'conversation': json.dumps(data.get('conversation', [])),
-        'escalated': str(data.get('escalated', 0)),
-        'owner_id': str(data.get('owner_id', '')),
-        'state': json.dumps(data.get('state', '')),
-        'started_at': str(data.get('started_at', datetime.now().timestamp()))
-    })
+    conversation = json.dumps(data.get('conversation', []))
+    escalated = str(data.get('escalated', 0))
+    owner_id = str(data.get('owner_id', ''))
+    state = json.dumps(data.get('state', ''))
+    started_at = str(data.get('started_at', datetime.now().timestamp()))
+    await redis.hset(key, "conversation", conversation)
+    await redis.hset(key, "escalated", escalated)
+    await redis.hset(key, "owner_id", owner_id)
+    await redis.hset(key, "state", state)
+    await redis.hset(key, "started_at", started_at)
 
 async def is_busy(user_id: int) -> bool:
     settings = await get_user_settings(user_id)
