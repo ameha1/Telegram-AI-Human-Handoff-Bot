@@ -3,10 +3,9 @@ from flask import Flask, request, render_template_string, abort
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from dotenv import load_dotenv
-import asyncio
 import logging
 import signal
-import threading
+import asyncio
 
 load_dotenv()
 
@@ -24,7 +23,6 @@ logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-# Initialize Application synchronously
 async def initialize_app():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     conn = await get_conn()
@@ -36,10 +34,8 @@ async def initialize_app():
     await application.initialize()
     return application
 
-# Run initialization and store the application instance
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-application = loop.run_until_complete(initialize_app())
+# Initialize application in the main event loop
+application = asyncio.run(initialize_app())
 
 # Add handlers
 application.add_handler(CommandHandler("start", start))
@@ -143,14 +139,15 @@ async def webhook():
 
 def signal_handler(sig, frame):
     logging.info("Shutting down application")
-    application.shutdown()
-    loop.call_soon_threadsafe(loop.stop)
+    asyncio.run(application.shutdown())
+    # No need to stop the loop manually; Uvicorn/Gunicorn will handle it
 
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 10000))
+    import threading
     threading.Thread(target=run_scheduler, daemon=True).start()
     import uvicorn
     uvicorn.run(app, host='0.0.0.0', port=port)

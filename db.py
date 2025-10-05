@@ -36,7 +36,7 @@ async def get_conversation(user_id: int) -> dict:
 
 async def save_conversation(user_id: int, data: dict) -> None:
     key = f"conversations:{user_id}"
-    await redis.hset(key, mapping={
+    await redis.hset(key, **{
         'conversation': json.dumps(data.get('conversation', [])),
         'escalated': str(data.get('escalated', 0)),
         'owner_id': str(data.get('owner_id', '')),
