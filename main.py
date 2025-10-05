@@ -3,6 +3,7 @@ from flask import Flask, request, render_template_string, abort
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from dotenv import load_dotenv
+from handlers import setup_handlers
 import logging
 import signal
 import asyncio
@@ -19,19 +20,29 @@ from utils import run_scheduler
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
 async def initialize_app():
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    conn = await get_conn()
-    try:
-        await conn.ping()
-        logging.info("Redis connection established successfully")
-    except Exception as e:
-        logging.error(f"Failed to connect to Redis: {str(e)}")
+    # Initialize Redis connection
+    redis = await get_conn()
+    logger.info("Redis connection established successfully")
+
+    # Initialize the bot application
+    application = Application.builder().token("7937730469:AAHCvwD9SMnAqjlpy5O6a5VSuu8TGHi9xoY").build()
+
+    # Set up handlers
+    setup_handlers(application)
+
+    # Start the bot
     await application.initialize()
+    await application.start()
+    logger.info("Bot application started")
+
     return application
 
 # Initialize application in the main event loop
