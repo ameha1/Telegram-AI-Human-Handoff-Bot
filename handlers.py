@@ -1,16 +1,19 @@
 import json
 from datetime import datetime
 from telegram import Update
+from telegram.ext import ContextTypes
 from telegram.ext import CallbackContext
 from db import get_user_settings, update_user_setting, get_conversation, save_conversation, is_busy, get_user_settings_by_username
 from ai import generate_ai_response, analyze_importance, generate_summary, generate_key_points, generate_suggested_action
 import logging
 
-async def start(update: Update, context: CallbackContext) -> None:
-    user_id = update.message.from_user.id
-    username = update.effective_user.username or 'unknown'
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    username = update.effective_user.username
+    initial_settings = {"status": "available", "auto_reply": "", "username": username}
     logging.info(f"Start command from user {user_id}, username: {username}")
-    
+    await update_user_setting(user_id, initial_settings)
+    await update.message.reply_text("Welcome! Bot is now active. Use /busy or /available to change status.")
     settings = await get_user_settings(user_id)
     if not settings:  # User not found, create new
         initial_settings = {
