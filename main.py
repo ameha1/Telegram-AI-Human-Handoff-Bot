@@ -26,11 +26,14 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
-# Global application instance
+# Global application instance and loop
 application = None
+loop = None
 
 async def initialize_app():
-    global application
+    global application, loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     conn = await get_conn()
     try:
@@ -55,21 +58,22 @@ async def setup_handlers(application):
     application.add_handler(CommandHandler("test_as_contact", test_as_contact))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
     logging.info("Handlers registered successfully")
+
+async def initialize():
+    global application
+    application = await initialize_app()
+    await setup_handlers(application)
     application.add_error_handler(error_handler)
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logging.error(f"Exception while handling an update: {context.error}")
 
-# Initialize Telegram Application on app startup
-def init_app():
+# Lazy initialization of Telegram Application on first request
+def lazy_init():
     global application
     if application is None:
-        loop = asyncio.get_event_loop()
-        application = loop.run_until_complete(initialize_app())
-        loop.run_until_complete(setup_handlers(application))
-
-# Call initialization on app creation
-init_app()
+        asyncio.run(initialize())
+    return application
 
 # HTML template for the elegant landing page
 INDEX_TEMPLATE = """
@@ -141,7 +145,9 @@ def index():
 def webhook():
     global application
     if application is None:
-        logging.error("Application not initialized")
+        application = lazy_init()
+    if application is None:
+        logging.error("Application initialization failed")
         abort(500)
     try:
         data = request.get_json()
@@ -151,7 +157,8 @@ def webhook():
             abort(400)
         update = Update.de_json(data, application.bot)
         if update:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             loop.run_until_complete(application.process_update(update))
             logging.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
             return '', 200
@@ -166,3 +173,4 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 10000))
     threading.Thread(target=run_scheduler, daemon=True).start()
     app.run(host='0.0.0.0', port=port)
+    
