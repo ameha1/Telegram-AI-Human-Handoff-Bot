@@ -40,6 +40,7 @@ application = None
 application_lock = threading.Lock()
 is_shutting_down = False
 initialization_event = threading.Event()
+app_initialized = False
 
 async def initialize_app():
     """Initialize Telegram application properly"""
@@ -77,7 +78,7 @@ async def setup_application_handlers(app_instance):
 
 def initialize_application_sync():
     """Initialize application synchronously with proper event loop management"""
-    global application, initialization_event
+    global application, initialization_event, app_initialized
     
     with application_lock:
         if application is not None and initialization_event.is_set():
@@ -96,6 +97,7 @@ def initialize_application_sync():
             loop.run_until_complete(application.start())
             
             initialization_event.set()
+            app_initialized = True
             logger.info("Telegram application initialized and started successfully")
             return application
             
@@ -103,11 +105,12 @@ def initialize_application_sync():
             logger.error(f"Failed to initialize application: {str(e)}")
             application = None
             initialization_event.clear()
+            app_initialized = False
             raise
 
 async def shutdown_application():
     """Shutdown application properly"""
-    global application, is_shutting_down, initialization_event
+    global application, is_shutting_down, initialization_event, app_initialized
     
     is_shutting_down = True
     if application:
@@ -121,6 +124,7 @@ async def shutdown_application():
         finally:
             application = None
             initialization_event.clear()
+            app_initialized = False
 
 def signal_handler(signum, frame):
     """Handle graceful shutdown"""
@@ -140,9 +144,6 @@ def signal_handler(signum, frame):
 # Register signal handlers
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
-
-# Register cleanup function
-atexit.register(lambda: signal_handler(signal.SIGTERM, None))
 
 # HTML template for the elegant landing page
 INDEX_TEMPLATE = """
@@ -211,10 +212,22 @@ def index():
     return render_template_string(INDEX_TEMPLATE)
 
 @app.before_request
-def check_shutdown():
-    """Reject requests during shutdown"""
+def check_shutdown_and_initialize():
+    """Reject requests during shutdown and initialize app on first request"""
+    global app_initialized
+    
     if is_shutting_down:
         return "Service is shutting down", 503
+    
+    # Initialize application on first request if not already done
+    if not app_initialized:
+        try:
+            initialize_application_sync()
+            start_scheduler()
+            logger.info("Application initialized on first request")
+        except Exception as e:
+            logger.error(f"Failed to initialize application on first request: {e}")
+            return "Service temporarily unavailable", 503
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -341,10 +354,9 @@ def start_scheduler():
     scheduler_thread.start()
     logger.info("Scheduler started")
 
-# Initialize application on startup
-@app.before_first_request
+# Initialize application immediately for better reliability
 def initialize_on_startup():
-    """Initialize application when first request comes in"""
+    """Initialize application when the app starts"""
     try:
         initialize_application_sync()
         start_scheduler()
@@ -352,15 +364,11 @@ def initialize_on_startup():
     except Exception as e:
         logger.error(f"Failed to initialize application on startup: {e}")
 
+# Call initialization on module import
+initialize_on_startup()
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 10000))
     
-    # Initialize application immediately for better reliability
-    try:
-        initialize_application_sync()
-        start_scheduler()
-        logger.info(f"Starting server on port {port}")
-        app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-    except Exception as e:
-        logger.error(f"Failed to start application: {e}")
-        sys.exit(1)
+    logger.info(f"Starting server on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
