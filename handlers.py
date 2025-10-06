@@ -74,6 +74,43 @@ async def set_threshold(update: Update, context: CallbackContext) -> None:
     await update_user_setting(user_id, 'importance_threshold', threshold)
     await update.message.reply_text(f"Importance threshold set to: {threshold}")
 
+async def set_keywords(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Please provide keywords. Usage: /set_keywords <word1,word2,...>")
+        return
+    keywords = ",".join(context.args)
+    await update_user_setting(user_id, 'keywords', keywords)
+    await update.message.reply_text(f"Keywords set to: {keywords}")
+
+async def add_schedule_handler(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if not context.args or len(context.args) != 3:
+        await update.message.reply_text("Usage: /add_schedule <days> <start> <end> (e.g., Mon-Fri 09:00 17:00)")
+        return
+    days, start_time, end_time = context.args
+    schedule = f"{days} {start_time}-{end_time}"
+    await update_user_setting(user_id, 'schedule', schedule)
+    await update.message.reply_text(f"Schedule set to: {schedule}")
+
+async def set_name(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if not context.args or len(context.args) != 1:
+        await update.message.reply_text("Usage: /set_name <name>")
+        return
+    name = context.args[0]
+    await update_user_setting(user_id, 'user_name', name)
+    await update.message.reply_text(f"Name set to: {name}")
+
+async def set_user_info(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Usage: /set_user_info <info>")
+        return
+    info = " ".join(context.args)
+    await update_user_setting(user_id, 'user_info', info)
+    await update.message.reply_text(f"User info set to: {info}")
+
 async def deactivate(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     settings = await get_user_settings(user_id)
@@ -82,6 +119,12 @@ async def deactivate(update: Update, context: CallbackContext) -> None:
         return
     await update.message.reply_text("Are you sure you want to deactivate? Reply 'YES' to confirm.")
     await update_user_setting(user_id, 'auto_reply', "DEACTIVATE_PENDING")
+
+async def test_as_contact(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    await update.message.reply_text("Testing as contact: Simulating a contact message. Use /busy to enable AI handling.")
+    # Simulate a contact message (e.g., log or store for testing)
+    logger.info(f"Test as contact initiated by user {user_id}")
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
     logger.info(f"Handling message from user {update.effective_user.id}: {update.message.text}")
@@ -200,6 +243,13 @@ def setup_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("available", available))
     application.add_handler(CommandHandler("set_auto_reply", set_auto_reply))
     application.add_handler(CommandHandler("set_threshold", set_threshold))
+    application.add_handler(CommandHandler("set_keywords", set_keywords))
+    application.add_handler(CommandHandler("add_schedule", add_schedule_handler))
+    application.add_handler(CommandHandler("set_name", set_name))
+    application.add_handler(CommandHandler("set_user_info", set_user_info))
     application.add_handler(CommandHandler("deactivate", deactivate))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CommandHandler("test_as_contact", test_as_contact))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
     logger.info("Handlers registered successfully")
+
+    
