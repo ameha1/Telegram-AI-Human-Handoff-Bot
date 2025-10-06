@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 import logging
 import threading
 import asyncio
-from wsgi_to_asgi import WSGIToASGI
 
 load_dotenv()
 
@@ -22,7 +21,6 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 logging.basicConfig(level=logging.INFO)
 
-# Create Flask app
 app = Flask(__name__)
 
 # Global application instance
@@ -57,11 +55,16 @@ def setup_handlers(application):
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
     logging.info("Handlers registered successfully")
 
-# Run initialization at startup
-async def on_startup():
-    global application
-    application = await initialize_app()
+# Initialize application at startup
+def initialize():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(initialize_app())
     setup_handlers(application)
+    loop.close()
+
+# Run initialization
+initialize()
 
 # HTML template for the elegant landing page
 INDEX_TEMPLATE = """
@@ -126,11 +129,11 @@ INDEX_TEMPLATE = """
 """
 
 @app.route('/')
-async def index():
+def index():
     return render_template_string(INDEX_TEMPLATE)
 
 @app.route('/webhook', methods=['POST'])
-async def webhook():
+def webhook():
     global application
     if application is None:
         logging.error("Application not initialized")
@@ -143,7 +146,10 @@ async def webhook():
             abort(400)
         update = Update.de_json(data, application.bot)
         if update:
-            await application.process_update(update)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(application.process_update(update))
+            loop.close()
             logging.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
             return '', 200
         else:
@@ -153,15 +159,7 @@ async def webhook():
         logging.error(f"Webhook error: {str(e)}", exc_info=True)
         abort(500)
 
-# ASGI app wrapper
-asgi_app = WSGIToASGI(app)
-
 if __name__ == '__main__':
-    import uvicorn
     port = int(os.getenv('PORT', 10000))
-    # Run initialization in the main thread's event loop
-    asyncio.run(on_startup())
-    # Run scheduler in a separate thread
     threading.Thread(target=run_scheduler, daemon=True).start()
-    # Run with Uvicorn using the ASGI wrapper
-    uvicorn.run(asgi_app, host='0.0.0.0', port=port, workers=1)
+    app.run(host='0.0.0.0', port=port)

@@ -6,4 +6,4 @@ schedule
 gunicorn
 upstash-redis
 uvicorn
-wsgi-to-asgi
+gevent
