@@ -7,6 +7,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from dotenv import load_dotenv
 import gevent.monkey
 import threading
+import signal
+import sys
 
 # Apply gevent monkey patching at the start
 gevent.monkey.patch_all()
@@ -16,64 +18,102 @@ load_dotenv()
 from db import get_conn
 from handlers import (
     start, busy, available, set_auto_reply, set_threshold, set_keywords,
-    add_schedule_handler, set_name, set_user_info, handle_message, deactivate, test_as_contact
+    add_schedule_handler, set_name, set_user_info, handle_message, deactivate, test_as_contact,
+    setup_handlers
 )
 from utils import run_scheduler
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 
-# Global application instance and loop
+# Global application instance with thread safety
 application = None
-loop = None
+application_lock = threading.Lock()
+is_shutting_down = False
 
 async def initialize_app():
-    global application, loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    conn = await get_conn()
+    """Initialize Telegram application"""
+    global application
     try:
+        logger.info("Initializing Telegram application...")
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+        
+        # Test Redis connection
+        conn = await get_conn()
         await conn.ping()
-        logging.info("Redis connection established successfully")
+        logger.info("Redis connection established successfully")
+        
+        return application
     except Exception as e:
-        logging.error(f"Failed to connect to Redis: {str(e)}")
-    await application.initialize()
-    return application
+        logger.error(f"Failed to initialize application: {str(e)}")
+        raise
 
-async def setup_handlers(application):
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("busy", busy))
-    application.add_handler(CommandHandler("available", available))
-    application.add_handler(CommandHandler("set_auto_reply", set_auto_reply))
-    application.add_handler(CommandHandler("set_threshold", set_threshold))
-    application.add_handler(CommandHandler("set_keywords", set_keywords))
-    application.add_handler(CommandHandler("add_schedule", add_schedule_handler))
-    application.add_handler(CommandHandler("set_name", set_name))
-    application.add_handler(CommandHandler("set_user_info", set_user_info))
-    application.add_handler(CommandHandler("deactivate", deactivate))
-    application.add_handler(CommandHandler("test_as_contact", test_as_contact))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
-    logging.info("Handlers registered successfully")
+async def setup_application_handlers(app_instance):
+    """Setup handlers for the application"""
+    await setup_handlers(app_instance)
+    
+    # Add error handler
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        logger.error(f"Exception while handling an update: {context.error}", exc_info=True)
+    
+    app_instance.add_error_handler(error_handler)
+    logger.info("Application handlers setup completed")
 
-async def initialize():
+def init_application():
+    """Initialize application synchronously with proper event loop management"""
     global application
-    application = await initialize_app()
-    await setup_handlers(application)
-    application.add_error_handler(error_handler)
+    
+    with application_lock:
+        if application is not None:
+            return application
+            
+        try:
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Initialize application
+            application = loop.run_until_complete(initialize_app())
+            loop.run_until_complete(setup_application_handlers(application))
+            
+            logger.info("Telegram application initialized successfully")
+            return application
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize application: {str(e)}")
+            application = None
+            raise
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logging.error(f"Exception while handling an update: {context.error}")
+def signal_handler(signum, frame):
+    """Handle graceful shutdown"""
+    global is_shutting_down
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    is_shutting_down = True
+    
+    # Schedule cleanup
+    if application:
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(application.shutdown())
+            loop.run_until_complete(application.stop())
+            loop.close()
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
+    
+    sys.exit(0)
 
-# Lazy initialization of Telegram Application on first request
-def lazy_init():
-    global application
-    if application is None:
-        asyncio.run(initialize())
-    return application
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 
 # HTML template for the elegant landing page
 INDEX_TEMPLATE = """
@@ -141,36 +181,115 @@ INDEX_TEMPLATE = """
 def index():
     return render_template_string(INDEX_TEMPLATE)
 
+@app.before_request
+def check_shutdown():
+    """Reject requests during shutdown"""
+    if is_shutting_down:
+        return "Service is shutting down", 503
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    """Webhook endpoint for Telegram with proper event loop management"""
     global application
-    if application is None:
-        application = lazy_init()
-    if application is None:
-        logging.error("Application initialization failed")
-        abort(500)
+    
+    if is_shutting_down:
+        return "Service is shutting down", 503
+        
     try:
+        # Lazy initialization
+        if application is None:
+            application = init_application()
+            if application is None:
+                logger.error("Application initialization failed")
+                abort(500)
+        
         data = request.get_json()
-        logging.info(f"Received webhook data: {data}")
         if not data:
-            logging.error("No JSON data in webhook request")
+            logger.error("No JSON data in webhook request")
             abort(400)
-        update = Update.de_json(data, application.bot)
-        if update:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(application.process_update(update))
-            logging.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
-            return '', 200
-        else:
-            logging.error("Failed to parse Telegram update")
-            abort(400)
+            
+        logger.info(f"Received webhook data for update_id: {data.get('update_id', 'unknown')}")
+        
+        # Process update in a dedicated event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            update = Update.de_json(data, application.bot)
+            if update:
+                # Process update with timeout
+                loop.run_until_complete(
+                    asyncio.wait_for(
+                        application.process_update(update), 
+                        timeout=30.0  # 30 second timeout
+                    )
+                )
+                chat_id = update.effective_chat.id if update.effective_chat else 'unknown'
+                logger.info(f"Successfully processed update for chat {chat_id}")
+                return '', 200
+            else:
+                logger.error("Failed to parse Telegram update")
+                abort(400)
+                
+        except asyncio.TimeoutError:
+            logger.error("Update processing timed out")
+            return 'Timeout', 408
+        except Exception as e:
+            logger.error(f"Error processing update: {str(e)}", exc_info=True)
+            return 'Error', 500
+        finally:
+            loop.close()
+            
     except Exception as e:
-        logging.error(f"Webhook error: {str(e)}", exc_info=True)
+        logger.error(f"Webhook error: {str(e)}", exc_info=True)
         abort(500)
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    try:
+        # Test Redis connection
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        conn = loop.run_until_complete(get_conn())
+        loop.run_until_complete(conn.ping())
+        loop.close()
+        
+        return {
+            "status": "healthy",
+            "service": "Telegram AI Human Handoff Bot",
+            "application_initialized": application is not None,
+            "shutting_down": is_shutting_down
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "application_initialized": application is not None,
+            "shutting_down": is_shutting_down
+        }, 500
+
+def start_scheduler():
+    """Start the scheduler in a separate thread"""
+    def run_scheduler_sync():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run_scheduler())
+    
+    scheduler_thread = threading.Thread(target=run_scheduler_sync, daemon=True)
+    scheduler_thread.start()
+    logger.info("Scheduler started")
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 10000))
-    threading.Thread(target=run_scheduler, daemon=True).start()
-    app.run(host='0.0.0.0', port=port)
     
+    # Initialize application on startup
+    try:
+        init_application()
+        start_scheduler()
+        logger.info(f"Starting server on port {port}")
+        app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    except Exception as e:
+        logger.error(f"Failed to start application: {e}")
+        sys.exit(1)
