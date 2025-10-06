@@ -65,6 +65,15 @@ async def set_auto_reply(update: Update, context: CallbackContext) -> None:
     await update_user_setting(user_id, 'auto_reply', reply_message)
     await update.message.reply_text(f"Auto-reply set to: {reply_message}")
 
+async def set_threshold(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if not context.args or len(context.args) != 1 or context.args[0] not in ['Low', 'Medium', 'High']:
+        await update.message.reply_text("Please provide a valid threshold. Usage: /set_threshold <Low/Medium/High>")
+        return
+    threshold = context.args[0]
+    await update_user_setting(user_id, 'importance_threshold', threshold)
+    await update.message.reply_text(f"Importance threshold set to: {threshold}")
+
 async def deactivate(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     settings = await get_user_settings(user_id)
@@ -190,7 +199,7 @@ def setup_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("busy", busy))
     application.add_handler(CommandHandler("available", available))
     application.add_handler(CommandHandler("set_auto_reply", set_auto_reply))
+    application.add_handler(CommandHandler("set_threshold", set_threshold))
     application.add_handler(CommandHandler("deactivate", deactivate))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     logger.info("Handlers registered successfully")
-    
