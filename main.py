@@ -5,6 +5,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from dotenv import load_dotenv
 import logging
 import threading
+import asyncio
 
 load_dotenv()
 
@@ -22,8 +23,12 @@ logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-# Initialize Application asynchronously within Uvicorn's context
+# Global application instance
+application = None
+
+# Initialize Application asynchronously
 async def initialize_app():
+    global application
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     conn = await get_conn()
     try:
@@ -34,7 +39,7 @@ async def initialize_app():
     await application.initialize()
     return application
 
-# Add handlers (moved to a function to be called after initialization)
+# Add handlers
 def setup_handlers(application):
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("busy", busy))
@@ -50,7 +55,7 @@ def setup_handlers(application):
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
     logging.info("Handlers registered successfully")
 
-# Initialize and store the application instance
+# Run initialization at startup
 async def on_startup():
     global application
     application = await initialize_app()
@@ -124,6 +129,10 @@ async def index():
 
 @app.route('/webhook', methods=['POST'])
 async def webhook():
+    global application
+    if application is None:
+        logging.error("Application not initialized")
+        abort(500)
     try:
         data = request.get_json()
         logging.info(f"Received webhook data: {data}")
@@ -145,8 +154,9 @@ async def webhook():
 if __name__ == '__main__':
     import uvicorn
     port = int(os.getenv('PORT', 10000))
+    # Run initialization in the main thread's event loop
+    asyncio.run(on_startup())
     # Run scheduler in a separate thread
     threading.Thread(target=run_scheduler, daemon=True).start()
-    # Use Uvicorn's event loop for startup
+    # Run with Uvicorn
     uvicorn.run(app, host='0.0.0.0', port=port, lifespan='on')
-    
