@@ -1,12 +1,10 @@
 import json
 from datetime import datetime
 from telegram import Update
-from telegram.ext import ContextTypes
-from telegram.ext import CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from db import get_user_settings, update_user_setting, get_conversation, save_conversation, is_busy, get_user_settings_by_username
 from ai import generate_ai_response, analyze_importance, generate_summary, generate_key_points, generate_suggested_action
 import logging
-
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +14,14 @@ async def start(update: Update, context: CallbackContext) -> None:
     logger.info(f"Start command from user {user_id}, username: {username}")
     
     settings = await get_user_settings(user_id)
-    if not settings:  # User not found, create new
+    if not settings:
         initial_settings = {
             'username': username,
             'auto_reply': "Hi, this is the owner's AI assistant. They are currently focusing on deep work and may be slow to respond. I'm here to help with initial queries.",
             'busy': '0',
             'importance_threshold': 'Medium',
             'keywords': '',
+            'user_id': str(user_id),
             'user_name': '',
             'user_info': ''
         }
@@ -57,7 +56,14 @@ async def available(update: Update, context: CallbackContext) -> None:
     await update_user_setting(user_id, 'busy', '0')
     await update.message.reply_text("You are now set as available.")
 
-# ... (other handlers remain the same, assuming no changes needed)
+async def set_auto_reply(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Please provide a reply message. Usage: /set_auto_reply <message>")
+        return
+    reply_message = " ".join(context.args)
+    await update_user_setting(user_id, 'auto_reply', reply_message)
+    await update.message.reply_text(f"Auto-reply set to: {reply_message}")
 
 async def deactivate(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
@@ -72,38 +78,49 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
     logger.info(f"Handling message from user {update.effective_user.id}: {update.message.text}")
     user_id = update.effective_user.id
     settings = await get_user_settings(user_id)
-    if settings:
-        if settings.get('auto_reply') == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
-            await update_user_setting(user_id, None)  # Clear all settings
-            await update.message.reply_text("You have been deactivated as an owner. Goodbye!")
-            return
-        elif settings.get('auto_reply') == "DEACTIVATE_PENDING":
-            await update_user_setting(user_id, 'auto_reply', settings.get('auto_reply_backup', "Hi, this is the owner's AI assistant..."))
-            await update.message.reply_text("Deactivation cancelled.")
-            return
-        await update.message.reply_text("Hi, use commands to manage me.")
+    if not settings:
+        await update.message.reply_text("You are not registered. Use /start to begin.")
         return
-    
-    contact_name = update.effective_user.full_name or f"@{update.effective_user.username or 'unknown'}"
-    link = f"t.me/{update.effective_user.username}" if update.effective_user.username else f"Contact ID: {user_id}"
+
+    # Initialize conversation data
     conv = await get_conversation(user_id)
     if not conv:
-        await update.message.reply_text("Hi, who are you trying to reach? Reply with @username of the person.")
-        await save_conversation(user_id, {'conversation': [], 'escalated': 0, 'owner_id': None, 'state': 'ASK_OWNER', 'started_at': datetime.now().timestamp()})
+        conv = {
+            'conversation': [],
+            'escalated': '0',
+            'owner_id': str(user_id),
+            'state': '',
+            'started_at': datetime.now().timestamp()
+        }
+        await save_conversation(user_id, conv)
+
+    # Set contact_name from the sender
+    contact_name = update.effective_user.first_name or update.effective_user.username or 'Unknown Contact'
+
+    # Define a default link (e.g., for escalation or support)
+    link = "https://t.me/switchtoAI_bot"
+
+    if settings.get('auto_reply') == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
+        await update_user_setting(user_id, None)
+        await update.message.reply_text("You have been deactivated as an owner. Goodbye!")
         return
-    
-    messages = conv['conversation']
-    escalated = conv['escalated']
-    owner_id = conv['owner_id']
-    state = conv['state']
-    
+    elif settings.get('auto_reply') == "DEACTIVATE_PENDING":
+        await update_user_setting(user_id, 'auto_reply', settings.get('auto_reply_backup', "Hi, this is the owner's AI assistant..."))
+        await update.message.reply_text("Deactivation cancelled.")
+        return
+
+    messages = conv.get('conversation', [])
+    escalated = conv.get('escalated', '0')
+    owner_id = conv.get('owner_id', str(user_id))
+    state = conv.get('state', '')
+
     if state == 'ASK_OWNER':
         text = update.message.text.strip()
         if text.startswith('@'):
             username = text[1:]
             target_settings = await get_user_settings_by_username(username)
             if target_settings:
-                owner_id = int(target_settings['user_id'])  # Assume user_id is stored
+                owner_id = target_settings.get('user_id', user_id)
                 await save_conversation(user_id, {**conv, 'owner_id': owner_id, 'state': None})
                 auto_reply = target_settings.get('auto_reply', "Hi, this is the owner's AI assistant...")
                 await update.message.reply_text(auto_reply)
@@ -114,35 +131,35 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         else:
             await update.message.reply_text("Please reply with @username.")
             return
-    
+
     if not owner_id:
         await update.message.reply_text("Error: No owner associated. Please start over.")
         return
-    
-    if not await is_busy(owner_id):
-        await update.message.reply_text("My owner is currently available. Please contact them directly.")
+
+    if not await is_busy(int(owner_id)):
+        await update.message.reply_text(f"Hi {contact_name}, the owner is currently available. Message sent: {update.message.text}")
         return
-    
+
     messages.append({'role': 'user', 'content': update.message.text})
     await save_conversation(user_id, {**conv, 'conversation': messages})
-    
-    settings = await get_user_settings(owner_id)
-    ai_reply = generate_ai_response(messages, settings)
+
+    owner_settings = await get_user_settings(int(owner_id))
+    ai_reply = generate_ai_response(messages, owner_settings)
     await update.message.reply_text(ai_reply)
     messages.append({'role': 'assistant', 'content': ai_reply})
     await save_conversation(user_id, {**conv, 'conversation': messages})
-    
-    if escalated == 1:
+
+    if escalated == '1':
         return
-    
+
     num_exchanges = len([m for m in messages if m['role'] == 'user'])
-    keywords = [kw.strip().lower() for kw in settings.get('keywords', '').split(',')]
+    keywords = [kw.strip().lower() for kw in owner_settings.get('keywords', '').split(',') if kw.strip()]
     has_keyword = any(any(kw in msg['content'].lower() for kw in keywords) for msg in messages if msg['role'] == 'user')
-    
-    analysis = analyze_importance(messages, settings, num_exchanges)
-    if analysis['escalate'] or has_keyword:
-        await escalate(context, owner_id, user_id, contact_name, link, messages)
-        await save_conversation(user_id, {**conv, 'escalated': 1})
+
+    analysis = analyze_importance(messages, owner_settings, num_exchanges)
+    if analysis.get('escalate', False) or has_keyword:
+        await escalate(context, int(owner_id), user_id, contact_name, link, messages)
+        await save_conversation(user_id, {**conv, 'escalated': '1'})
 
 async def escalate(context: CallbackContext, owner_id: int, contact_id: int, contact_name: str, link: str, messages: list) -> None:
     conv_text = '\n'.join([f"{msg['role']}: {msg['content']}" for msg in messages])
@@ -165,3 +182,15 @@ Direct Link: {link}
 Suggested Action: {suggested}
     """
     await context.bot.send_message(chat_id=owner_id, text=notification)
+
+# Register handlers
+def setup_handlers(application: Application) -> None:
+    """Register all command and message handlers with the application."""
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("busy", busy))
+    application.add_handler(CommandHandler("available", available))
+    application.add_handler(CommandHandler("set_auto_reply", set_auto_reply))
+    application.add_handler(CommandHandler("deactivate", deactivate))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    logger.info("Handlers registered successfully")
+    
