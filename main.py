@@ -3,9 +3,7 @@ from flask import Flask, request, render_template_string, abort
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from dotenv import load_dotenv
-import asyncio
 import logging
-import signal
 import threading
 
 load_dotenv()
@@ -24,7 +22,7 @@ logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-# Initialize Application synchronously
+# Initialize Application asynchronously within Uvicorn's context
 async def initialize_app():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     conn = await get_conn()
@@ -36,24 +34,27 @@ async def initialize_app():
     await application.initialize()
     return application
 
-# Run initialization and store the application instance
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-application = loop.run_until_complete(initialize_app())
+# Add handlers (moved to a function to be called after initialization)
+def setup_handlers(application):
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("busy", busy))
+    application.add_handler(CommandHandler("available", available))
+    application.add_handler(CommandHandler("set_auto_reply", set_auto_reply))
+    application.add_handler(CommandHandler("set_threshold", set_threshold))
+    application.add_handler(CommandHandler("set_keywords", set_keywords))
+    application.add_handler(CommandHandler("add_schedule", add_schedule_handler))
+    application.add_handler(CommandHandler("set_name", set_name))
+    application.add_handler(CommandHandler("set_user_info", set_user_info))
+    application.add_handler(CommandHandler("deactivate", deactivate))
+    application.add_handler(CommandHandler("test_as_contact", test_as_contact))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
+    logging.info("Handlers registered successfully")
 
-# Add handlers
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("busy", busy))
-application.add_handler(CommandHandler("available", available))
-application.add_handler(CommandHandler("set_auto_reply", set_auto_reply))
-application.add_handler(CommandHandler("set_threshold", set_threshold))
-application.add_handler(CommandHandler("set_keywords", set_keywords))
-application.add_handler(CommandHandler("add_schedule", add_schedule_handler))
-application.add_handler(CommandHandler("set_name", set_name))
-application.add_handler(CommandHandler("set_user_info", set_user_info))
-application.add_handler(CommandHandler("deactivate", deactivate))
-application.add_handler(CommandHandler("test_as_contact", test_as_contact))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
+# Initialize and store the application instance
+async def on_startup():
+    global application
+    application = await initialize_app()
+    setup_handlers(application)
 
 # HTML template for the elegant landing page
 INDEX_TEMPLATE = """
@@ -141,16 +142,11 @@ async def webhook():
         logging.error(f"Webhook error: {str(e)}", exc_info=True)
         abort(500)
 
-def signal_handler(sig, frame):
-    logging.info("Shutting down application")
-    application.shutdown()
-    loop.call_soon_threadsafe(loop.stop)
-
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
-
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 10000))
-    threading.Thread(target=run_scheduler, daemon=True).start()
     import uvicorn
-    uvicorn.run(app, host='0.0.0.0', port=port)
+    port = int(os.getenv('PORT', 10000))
+    # Run scheduler in a separate thread
+    threading.Thread(target=run_scheduler, daemon=True).start()
+    # Use Uvicorn's event loop for startup
+    uvicorn.run(app, host='0.0.0.0', port=port, lifespan='on')
+    
