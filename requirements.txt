@@ -4,5 +4,6 @@ flask[async]
 python-dotenv
 schedule
 gunicorn
-upstash-redis  
+upstash-redis
 uvicorn
+wsgi-to-asgi

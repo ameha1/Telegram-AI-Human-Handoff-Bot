@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import logging
 import threading
 import asyncio
-from asgiref.wsgi import WSGIMiddleware
+from wsgi_to_asgi import WSGIToASGI
 
 load_dotenv()
 
@@ -154,7 +154,7 @@ async def webhook():
         abort(500)
 
 # ASGI app wrapper
-asgi_app = WSGIMiddleware(app)
+asgi_app = WSGIToASGI(app)
 
 if __name__ == '__main__':
     import uvicorn
