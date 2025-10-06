@@ -9,6 +9,7 @@ import gevent.monkey
 import threading
 import signal
 import sys
+import atexit
 
 # Apply gevent monkey patching at the start
 gevent.monkey.patch_all()
@@ -38,13 +39,19 @@ app = Flask(__name__)
 application = None
 application_lock = threading.Lock()
 is_shutting_down = False
+initialization_event = threading.Event()
 
 async def initialize_app():
-    """Initialize Telegram application"""
+    """Initialize Telegram application properly"""
     global application
     try:
         logger.info("Initializing Telegram application...")
+        
+        # Create application with proper initialization
         application = Application.builder().token(TELEGRAM_TOKEN).build()
+        
+        # Initialize the application (this is the crucial missing step)
+        await application.initialize()
         
         # Test Redis connection
         conn = await get_conn()
@@ -54,6 +61,7 @@ async def initialize_app():
         return application
     except Exception as e:
         logger.error(f"Failed to initialize application: {str(e)}")
+        application = None
         raise
 
 async def setup_application_handlers(app_instance):
@@ -67,12 +75,12 @@ async def setup_application_handlers(app_instance):
     app_instance.add_error_handler(error_handler)
     logger.info("Application handlers setup completed")
 
-def init_application():
+def initialize_application_sync():
     """Initialize application synchronously with proper event loop management"""
-    global application
+    global application, initialization_event
     
     with application_lock:
-        if application is not None:
+        if application is not None and initialization_event.is_set():
             return application
             
         try:
@@ -84,36 +92,57 @@ def init_application():
             application = loop.run_until_complete(initialize_app())
             loop.run_until_complete(setup_application_handlers(application))
             
-            logger.info("Telegram application initialized successfully")
+            # Start the application
+            loop.run_until_complete(application.start())
+            
+            initialization_event.set()
+            logger.info("Telegram application initialized and started successfully")
             return application
             
         except Exception as e:
             logger.error(f"Failed to initialize application: {str(e)}")
             application = None
+            initialization_event.clear()
             raise
+
+async def shutdown_application():
+    """Shutdown application properly"""
+    global application, is_shutting_down, initialization_event
+    
+    is_shutting_down = True
+    if application:
+        try:
+            logger.info("Shutting down Telegram application...")
+            await application.shutdown()
+            await application.stop()
+            logger.info("Telegram application shut down successfully")
+        except Exception as e:
+            logger.error(f"Error during application shutdown: {e}")
+        finally:
+            application = None
+            initialization_event.clear()
 
 def signal_handler(signum, frame):
     """Handle graceful shutdown"""
-    global is_shutting_down
     logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-    is_shutting_down = True
     
     # Schedule cleanup
-    if application:
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(application.shutdown())
-            loop.run_until_complete(application.stop())
-            loop.close()
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(shutdown_application())
+        loop.close()
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
     
     sys.exit(0)
 
 # Register signal handlers
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
+
+# Register cleanup function
+atexit.register(lambda: signal_handler(signal.SIGTERM, None))
 
 # HTML template for the elegant landing page
 INDEX_TEMPLATE = """
@@ -189,19 +218,21 @@ def check_shutdown():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Webhook endpoint for Telegram with proper event loop management"""
+    """Webhook endpoint for Telegram with proper initialization checks"""
     global application
     
     if is_shutting_down:
         return "Service is shutting down", 503
         
     try:
-        # Lazy initialization
+        # Ensure application is initialized
+        if application is None or not initialization_event.is_set():
+            logger.info("Application not initialized, initializing now...")
+            initialize_application_sync()
+            
         if application is None:
-            application = init_application()
-            if application is None:
-                logger.error("Application initialization failed")
-                abort(500)
+            logger.error("Application initialization failed after attempt")
+            return "Service temporarily unavailable", 503
         
         data = request.get_json()
         if not data:
@@ -234,6 +265,15 @@ def webhook():
         except asyncio.TimeoutError:
             logger.error("Update processing timed out")
             return 'Timeout', 408
+        except RuntimeError as e:
+            if "not initialized" in str(e):
+                logger.error("Application not properly initialized, reinitializing...")
+                initialization_event.clear()
+                application = None
+                return "Service temporarily unavailable", 503
+            else:
+                logger.error(f"Runtime error processing update: {str(e)}", exc_info=True)
+                return 'Error', 500
         except Exception as e:
             logger.error(f"Error processing update: {str(e)}", exc_info=True)
             return 'Error', 500
@@ -242,7 +282,7 @@ def webhook():
             
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}", exc_info=True)
-        abort(500)
+        return 'Error', 500
 
 @app.route('/health')
 def health():
@@ -258,7 +298,7 @@ def health():
         return {
             "status": "healthy",
             "service": "Telegram AI Human Handoff Bot",
-            "application_initialized": application is not None,
+            "application_initialized": application is not None and initialization_event.is_set(),
             "shutting_down": is_shutting_down
         }
     except Exception as e:
@@ -266,8 +306,23 @@ def health():
         return {
             "status": "unhealthy",
             "error": str(e),
-            "application_initialized": application is not None,
+            "application_initialized": application is not None and initialization_event.is_set(),
             "shutting_down": is_shutting_down
+        }, 500
+
+@app.route('/init')
+def init_endpoint():
+    """Manual initialization endpoint for testing"""
+    try:
+        initialize_application_sync()
+        return {
+            "status": "initialized",
+            "application_ready": initialization_event.is_set()
+        }
+    except Exception as e:
+        return {
+            "status": "initialization_failed",
+            "error": str(e)
         }, 500
 
 def start_scheduler():
@@ -275,18 +330,34 @@ def start_scheduler():
     def run_scheduler_sync():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(run_scheduler())
+        try:
+            loop.run_until_complete(run_scheduler())
+        except Exception as e:
+            logger.error(f"Scheduler error: {e}")
+        finally:
+            loop.close()
     
     scheduler_thread = threading.Thread(target=run_scheduler_sync, daemon=True)
     scheduler_thread.start()
     logger.info("Scheduler started")
 
+# Initialize application on startup
+@app.before_first_request
+def initialize_on_startup():
+    """Initialize application when first request comes in"""
+    try:
+        initialize_application_sync()
+        start_scheduler()
+        logger.info("Application initialized on startup")
+    except Exception as e:
+        logger.error(f"Failed to initialize application on startup: {e}")
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 10000))
     
-    # Initialize application on startup
+    # Initialize application immediately for better reliability
     try:
-        init_application()
+        initialize_application_sync()
         start_scheduler()
         logger.info(f"Starting server on port {port}")
         app.run(host='0.0.0.0', port=port, debug=False, threaded=True)

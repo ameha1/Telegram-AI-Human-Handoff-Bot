@@ -26,9 +26,8 @@ async def start(update: Update, context: CallbackContext) -> None:
                 'user_name': '',
                 'user_info': ''
             }
-            # Use the correct update_user_setting function
-            for key, value in initial_settings.items():
-                await update_user_setting(user_id, key, value)
+            # Use the correct update_user_setting function with dict
+            await update_user_setting(user_id, initial_settings)
             logger.info(f"Created new user {user_id}")
         
         await update.message.reply_text(f"""
@@ -156,8 +155,13 @@ async def deactivate(update: Update, context: CallbackContext) -> None:
         if not settings:
             await update.message.reply_text("You are not registered as an owner.")
             return
-        await update.message.reply_text("Are you sure you want to deactivate? Reply 'YES' to confirm.")
+        
+        # Store current auto_reply for cancellation
+        current_auto_reply = settings.get('auto_reply', '')
+        await update_user_setting(user_id, 'auto_reply_backup', current_auto_reply)
         await update_user_setting(user_id, 'auto_reply', "DEACTIVATE_PENDING")
+        
+        await update.message.reply_text("Are you sure you want to deactivate? Reply 'YES' to confirm.")
     except Exception as e:
         logger.error(f"Error in deactivate: {e}", exc_info=True)
         await update.message.reply_text("Failed to process deactivation. Please try again.")
@@ -180,6 +184,19 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
             await update.message.reply_text("You are not registered. Use /start to begin.")
             return
 
+        # Handle deactivation confirmation
+        if settings.get('auto_reply') == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
+            from db import redis
+            await redis.delete(f"user:{user_id}")
+            await update.message.reply_text("You have been deactivated as an owner. Goodbye!")
+            return
+        elif settings.get('auto_reply') == "DEACTIVATE_PENDING":
+            # Restore original auto_reply
+            backup_reply = settings.get('auto_reply_backup', "Hi, this is the owner's AI assistant...")
+            await update_user_setting(user_id, 'auto_reply', backup_reply)
+            await update.message.reply_text("Deactivation cancelled.")
+            return
+
         # Initialize conversation data
         conv = await get_conversation(user_id)
         if not conv:
@@ -195,19 +212,8 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         # Set contact_name from the sender
         contact_name = update.effective_user.first_name or update.effective_user.username or 'Unknown Contact'
 
-        # Define a default link (e.g., for escalation or support)
+        # Define a default link
         link = "https://t.me/switchtoAI_bot"
-
-        if settings.get('auto_reply') == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
-            # Clear all user settings
-            from db import redis
-            await redis.delete(f"users:{user_id}")
-            await update.message.reply_text("You have been deactivated as an owner. Goodbye!")
-            return
-        elif settings.get('auto_reply') == "DEACTIVATE_PENDING":
-            await update_user_setting(user_id, 'auto_reply', settings.get('auto_reply_backup', "Hi, this is the owner's AI assistant..."))
-            await update.message.reply_text("Deactivation cancelled.")
-            return
 
         messages = conv.get('conversation', [])
         escalated = conv.get('escalated', '0')
@@ -244,6 +250,10 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         await save_conversation(user_id, {**conv, 'conversation': messages})
 
         owner_settings = await get_user_settings(int(owner_id))
+        # Fix: Provide default values for missing settings
+        owner_settings.setdefault('user_name', 'Owner')
+        owner_settings.setdefault('user_info', 'The owner is a professional who works on AI projects.')
+        
         ai_reply = generate_ai_response(messages, owner_settings)
         await update.message.reply_text(ai_reply)
         messages.append({'role': 'assistant', 'content': ai_reply})
