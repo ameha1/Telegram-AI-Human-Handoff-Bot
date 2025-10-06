@@ -154,7 +154,7 @@ async def webhook():
 if __name__ == '__main__':
     import uvicorn
     port = int(os.getenv('PORT', 10000))
-    # Run initialization in the main thread's event loop
+    # Ensure initialization completes before starting the server
     asyncio.run(on_startup())
     # Run scheduler in a separate thread
     threading.Thread(target=run_scheduler, daemon=True).start()
