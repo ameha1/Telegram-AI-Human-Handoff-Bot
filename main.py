@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import logging
 import threading
 import asyncio
+from asgiref.wsgi import WSGIMiddleware
 
 load_dotenv()
 
@@ -21,12 +22,13 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 logging.basicConfig(level=logging.INFO)
 
+# Create Flask app
 app = Flask(__name__)
 
 # Global application instance
 application = None
 
-# Initialize Application asynchronously
+# Initialize Telegram Application asynchronously
 async def initialize_app():
     global application
     application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -151,12 +153,15 @@ async def webhook():
         logging.error(f"Webhook error: {str(e)}", exc_info=True)
         abort(500)
 
+# ASGI app wrapper
+asgi_app = WSGIMiddleware(app)
+
 if __name__ == '__main__':
     import uvicorn
     port = int(os.getenv('PORT', 10000))
-    # Ensure initialization completes before starting the server
+    # Run initialization in the main thread's event loop
     asyncio.run(on_startup())
     # Run scheduler in a separate thread
     threading.Thread(target=run_scheduler, daemon=True).start()
-    # Run with Uvicorn
-    uvicorn.run(app, host='0.0.0.0', port=port, lifespan='on')
+    # Run with Uvicorn using the ASGI wrapper
+    uvicorn.run(asgi_app, host='0.0.0.0', port=port, workers=1)
