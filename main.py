@@ -59,6 +59,12 @@ def setup_handlers(application):
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
     logging.info("Handlers registered successfully")
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logging.error(f"Exception while handling an update: {context.error}")
+
+# Add this after setup_handlers(application)
+application.add_error_handler(error_handler)
+
 # Initialize application at startup
 def initialize():
     global application, loop

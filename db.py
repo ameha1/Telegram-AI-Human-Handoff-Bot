@@ -18,11 +18,11 @@ async def get_user_settings(user_id: int) -> dict:
     return data  # Return as is since values are already strings
 
 async def update_user_setting(user_id: int, key_or_dict: str | dict, value=None) -> None:
-    key = f"users:{user_id}"
-    if isinstance(key_or_dict, dict):
-        for k, v in key_or_dict.items():
-            await redis.hset(key, k, v)
-    else:
+    key = f"user:{user_id}"
+    if value is None and key_or_dict is not None:
+        # Handle case where we want to clear a specific key
+        await redis.hdel(key, key_or_dict)
+    elif value is not None and key_or_dict is not None:
         await redis.hset(key, key_or_dict, value)
 
 async def get_conversation(user_id: int) -> dict:

@@ -17,7 +17,7 @@ def generate_ai_response(messages: list, settings: dict) -> str:
 
 def analyze_importance(messages: list, settings: dict, num_exchanges: int) -> dict:
     conv_text = '\n'.join([f"{msg['role']}: {msg['content']}" for msg in messages])
-    keywords = [kw.strip().lower() for kw in settings['keywords'].split(',')]
+    keywords = [kw.strip().lower() for kw in settings.get('keywords', '').split(',')]
     threshold_desc = {
         'Low': 'Escalate if urgency is medium or higher, or any negative sentiment, or complex.',
         'Medium': 'Escalate if urgency high, or strong negative/positive sentiment, or complex after 2-3 exchanges.',
