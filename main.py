@@ -1,11 +1,15 @@
 import os
+import asyncio
+import logging
 from flask import Flask, request, render_template_string, abort
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
-import logging
+import gevent.monkey
 import threading
-import asyncio
+
+# Apply gevent monkey patching at the start
+gevent.monkey.patch_all()
 
 load_dotenv()
 
@@ -20,15 +24,15 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 logging.basicConfig(level=logging.INFO)
-
 app = Flask(__name__)
 
 # Global application instance
 application = None
+loop = None
 
-# Initialize Telegram Application asynchronously
+# Initialize Telegram Application
 async def initialize_app():
-    global application
+    global application, loop
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     conn = await get_conn()
     try:
@@ -57,11 +61,11 @@ def setup_handlers(application):
 
 # Initialize application at startup
 def initialize():
+    global application, loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(initialize_app())
+    application = loop.run_until_complete(initialize_app())
     setup_handlers(application)
-    loop.close()
 
 # Run initialization
 initialize()
@@ -134,7 +138,7 @@ def index():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    global application
+    global application, loop
     if application is None:
         logging.error("Application not initialized")
         abort(500)
@@ -146,10 +150,8 @@ def webhook():
             abort(400)
         update = Update.de_json(data, application.bot)
         if update:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Run the update processing in the existing event loop
             loop.run_until_complete(application.process_update(update))
-            loop.close()
             logging.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
             return '', 200
         else:
