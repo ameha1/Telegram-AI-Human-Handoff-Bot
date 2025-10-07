@@ -1,6 +1,6 @@
-from db import clean_old_convs
 import asyncio
 import logging
+from db import clean_old_convs
 
 logger = logging.getLogger(__name__)
 
