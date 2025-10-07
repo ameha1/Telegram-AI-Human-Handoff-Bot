@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import threading
 import signal
 import sys
+import concurrent.futures
 
 load_dotenv()
 
@@ -25,12 +26,14 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Global application instance with thread safety
+# Global application instance
 application = None
 application_lock = threading.Lock()
 is_shutting_down = False
-initialization_event = threading.Event()
 app_initialized = False
+
+# Thread pool for async operations
+thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 async def initialize_app():
     """Initialize Telegram application properly"""
@@ -38,7 +41,7 @@ async def initialize_app():
     try:
         logger.info("Initializing Telegram application...")
         
-        # Create application with proper initialization
+        # Create application
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         
         # Setup handlers
@@ -61,9 +64,35 @@ async def initialize_app():
         application = None
         raise
 
+def initialize_application_sync():
+    """Initialize application synchronously"""
+    global application, app_initialized
+    
+    with application_lock:
+        if application is not None and app_initialized:
+            return application
+            
+        try:
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Initialize application
+            application = loop.run_until_complete(initialize_app())
+            
+            app_initialized = True
+            logger.info("Telegram application initialized and started successfully")
+            return application
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize application: {str(e)}")
+            application = None
+            app_initialized = False
+            raise
+
 async def shutdown_application():
     """Shutdown application properly"""
-    global application, is_shutting_down, initialization_event, app_initialized
+    global application, is_shutting_down, app_initialized
     
     is_shutting_down = True
     if application:
@@ -76,40 +105,14 @@ async def shutdown_application():
             logger.error(f"Error during application shutdown: {e}")
         finally:
             application = None
-            initialization_event.clear()
             app_initialized = False
-
-def initialize_application_sync():
-    """Initialize application synchronously with proper event loop management"""
-    global application, initialization_event, app_initialized
-    
-    with application_lock:
-        if application is not None and initialization_event.is_set():
-            return application
-            
-        try:
-            # Create new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            # Initialize application
-            application = loop.run_until_complete(initialize_app())
-            
-            initialization_event.set()
-            app_initialized = True
-            logger.info("Telegram application initialized and started successfully")
-            return application
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize application: {str(e)}")
-            application = None
-            initialization_event.clear()
-            app_initialized = False
-            raise
 
 def signal_handler(signum, frame):
     """Handle graceful shutdown"""
     logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    
+    global thread_pool
+    thread_pool.shutdown(wait=False)
     
     # Schedule cleanup
     try:
@@ -198,9 +201,35 @@ def check_shutdown():
     if is_shutting_down:
         return "Service is shutting down", 503
 
+def process_update_in_thread(update_data, app_instance):
+    """Process update in a separate thread with its own event loop"""
+    try:
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Parse the update
+        update = Update.de_json(update_data, app_instance.bot)
+        if not update:
+            logger.error("Failed to parse Telegram update")
+            return False
+        
+        # Process the update
+        loop.run_until_complete(app_instance.process_update(update))
+        
+        chat_id = update.effective_chat.id if update.effective_chat else 'unknown'
+        logger.info(f"Successfully processed update for chat {chat_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error processing update in thread: {str(e)}", exc_info=True)
+        return False
+    finally:
+        loop.close()
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Simplified webhook endpoint"""
+    """Webhook endpoint for Telegram"""
     global application
     
     if is_shutting_down:
@@ -208,7 +237,7 @@ def webhook():
         
     try:
         # Ensure application is initialized
-        if application is None or not initialization_event.is_set():
+        if application is None or not app_initialized:
             logger.info("Application not initialized, initializing now...")
             initialize_application_sync()
             
@@ -223,66 +252,61 @@ def webhook():
             
         logger.info(f"Received webhook data for update_id: {data.get('update_id', 'unknown')}")
         
-        # Use thread pool to process the update
-        import concurrent.futures
+        # Submit the update processing to thread pool
+        future = thread_pool.submit(process_update_in_thread, data, application)
         
-        def process_update_sync():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                update = Update.de_json(data, application.bot)
-                if update:
-                    loop.run_until_complete(application.process_update(update))
-                    chat_id = update.effective_chat.id if update.effective_chat else 'unknown'
-                    logger.info(f"Successfully processed update for chat {chat_id}")
-                    return True
-                return False
-            except Exception as e:
-                logger.error(f"Error processing update: {str(e)}")
-                return False
-            finally:
-                loop.close()
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(process_update_sync)
-            try:
-                success = future.result(timeout=30.0)
-                if success:
-                    return '', 200
-                else:
-                    return 'Error processing update', 500
-            except concurrent.futures.TimeoutError:
-                logger.error("Update processing timed out")
-                return 'Timeout', 408
+        try:
+            # Wait for the result with timeout
+            success = future.result(timeout=25.0)  # 25 second timeout
+            if success:
+                return '', 200
+            else:
+                return 'Error processing update', 500
                 
+        except concurrent.futures.TimeoutError:
+            logger.error("Update processing timed out")
+            return 'Timeout', 408
+        except Exception as e:
+            logger.error(f"Error waiting for update processing: {str(e)}")
+            return 'Error', 500
+            
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}", exc_info=True)
         return 'Error', 500
-    
 
 @app.route('/health')
 def health():
     """Health check endpoint"""
     try:
-        # Test Redis connection
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        conn = loop.run_until_complete(get_conn())
-        loop.run_until_complete(conn.ping())
-        loop.close()
+        # Test Redis connection in a separate thread
+        def test_redis():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                conn = loop.run_until_complete(get_conn())
+                loop.run_until_complete(conn.ping())
+                return True
+            except Exception as e:
+                logger.error(f"Redis health check failed: {e}")
+                return False
+            finally:
+                loop.close()
+        
+        redis_healthy = thread_pool.submit(test_redis).result(timeout=10.0)
         
         return {
-            "status": "healthy",
+            "status": "healthy" if redis_healthy else "unhealthy",
             "service": "Telegram AI Human Handoff Bot",
-            "application_initialized": application is not None and initialization_event.is_set(),
-            "shutting_down": is_shutting_down
+            "application_initialized": app_initialized,
+            "shutting_down": is_shutting_down,
+            "redis_connected": redis_healthy
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {
             "status": "unhealthy",
             "error": str(e),
-            "application_initialized": application is not None and initialization_event.is_set(),
+            "application_initialized": app_initialized,
             "shutting_down": is_shutting_down
         }, 500
 
@@ -322,4 +346,3 @@ if __name__ == '__main__':
     
     logger.info(f"Starting server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-
