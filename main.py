@@ -200,7 +200,7 @@ def check_shutdown():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Webhook endpoint for Telegram with proper initialization checks"""
+    """Simplified webhook endpoint"""
     global application
     
     if is_shutting_down:
@@ -223,39 +223,42 @@ def webhook():
             
         logger.info(f"Received webhook data for update_id: {data.get('update_id', 'unknown')}")
         
-        # Process update in a dedicated event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Use thread pool to process the update
+        import concurrent.futures
         
-        try:
-            update = Update.de_json(data, application.bot)
-            if update:
-                # Process update with timeout
-                loop.run_until_complete(
-                    asyncio.wait_for(
-                        application.process_update(update), 
-                        timeout=30.0  # 30 second timeout
-                    )
-                )
-                chat_id = update.effective_chat.id if update.effective_chat else 'unknown'
-                logger.info(f"Successfully processed update for chat {chat_id}")
-                return '', 200
-            else:
-                logger.error("Failed to parse Telegram update")
-                abort(400)
+        def process_update_sync():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                update = Update.de_json(data, application.bot)
+                if update:
+                    loop.run_until_complete(application.process_update(update))
+                    chat_id = update.effective_chat.id if update.effective_chat else 'unknown'
+                    logger.info(f"Successfully processed update for chat {chat_id}")
+                    return True
+                return False
+            except Exception as e:
+                logger.error(f"Error processing update: {str(e)}")
+                return False
+            finally:
+                loop.close()
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(process_update_sync)
+            try:
+                success = future.result(timeout=30.0)
+                if success:
+                    return '', 200
+                else:
+                    return 'Error processing update', 500
+            except concurrent.futures.TimeoutError:
+                logger.error("Update processing timed out")
+                return 'Timeout', 408
                 
-        except asyncio.TimeoutError:
-            logger.error("Update processing timed out")
-            return 'Timeout', 408
-        except Exception as e:
-            logger.error(f"Error processing update: {str(e)}", exc_info=True)
-            return 'Error', 500
-        finally:
-            loop.close()
-            
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}", exc_info=True)
         return 'Error', 500
+    
 
 @app.route('/health')
 def health():
@@ -320,4 +323,3 @@ if __name__ == '__main__':
     logger.info(f"Starting server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 
-    

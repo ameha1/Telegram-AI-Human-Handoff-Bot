@@ -77,17 +77,18 @@ async def is_busy(user_id: int) -> bool:
     return settings.get('busy', '0') == '1'
 
 async def get_user_settings_by_username(username: str) -> dict:
-    # Scan for user keys with both patterns
+    # Scan for user keys with both patterns using KEYS command (for Upstash Redis)
     patterns = ["user:*", "users:*"]
     
     for pattern in patterns:
-        async for key in redis.scan_iter(match=pattern):
+        keys = await redis.keys(pattern)
+        for key in keys:
             try:
-                user_id_str = key.decode('utf-8').split(':')[1]
+                user_id_str = key.split(':')[1]
                 settings = await get_user_settings(int(user_id_str))
                 if settings.get('username') == username:
                     return settings
-            except (IndexError, ValueError) as e:
+            except (IndexError, ValueError, Exception) as e:
                 continue
     return {}
 
@@ -99,14 +100,19 @@ async def clean_old_convs(max_age_hours: int = 24) -> int:
     deleted_count = 0
     cutoff_time = datetime.now().timestamp() - (max_age_hours * 3600)
     
-    async for key in redis.scan_iter(match="conversations:*"):
+    # Use KEYS instead of SCAN for Upstash Redis
+    keys = await redis.keys("conversations:*")
+    
+    for key in keys:
         try:
-            conv_data = await get_conversation(int(key.decode('utf-8').split(':')[1]))
+            # Extract user_id from key
+            user_id_str = key.split(':')[1]
+            conv_data = await get_conversation(int(user_id_str))
             started_at = float(conv_data.get('started_at', 0))
             if started_at < cutoff_time:
                 await redis.delete(key)
                 deleted_count += 1
-        except (ValueError, KeyError) as e:
+        except (ValueError, KeyError, Exception) as e:
             # Delete corrupted conversations
             await redis.delete(key)
             deleted_count += 1
