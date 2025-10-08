@@ -9,6 +9,10 @@ import threading
 import signal
 import sys
 import concurrent.futures
+import gevent.monkey
+
+# Apply gevent monkey patching at the start
+gevent.monkey.patch_all()
 
 load_dotenv()
 
@@ -121,11 +125,14 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def process_update_in_thread(data: dict, app: Application) -> bool:
-    """Process update in a separate thread"""
+    """Process update in a separate thread with explicit event loop"""
     try:
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
         update = Update.de_json(data, app.bot)
         if update:
-            loop = asyncio.get_event_loop()
             loop.run_until_complete(app.process_update(update))
             logger.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
             return True
@@ -135,6 +142,8 @@ def process_update_in_thread(data: dict, app: Application) -> bool:
     except Exception as e:
         logger.error(f"Error processing update: {str(e)}", exc_info=True)
         return False
+    finally:
+        loop.close()  # Clean up the event loop
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
