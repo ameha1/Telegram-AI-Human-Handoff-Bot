@@ -7,7 +7,7 @@ backlog = 2048
 
 # Worker processes
 workers = 1
-worker_class = "sync"  
+worker_class = "gevent"  # Changed to gevent for async support
 worker_connections = 1000
 max_requests = 1000
 max_requests_jitter = 50

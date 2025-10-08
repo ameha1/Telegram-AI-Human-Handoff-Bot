@@ -10,10 +10,10 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 def generate_ai_response(messages: list, settings: dict) -> str:
     try:
-        system_prompt = f"You are an intelligent AI assistant for {settings['user_name']}. Be natural, helpful, and human-like. Answer basic FAQs using this info: {settings['user_info']}. Ask clarifying questions if needed. Set expectations like 'I'll note this down for {settings['user_name']}.' The user is busy, so handle initial queries."
+        system_prompt = f"You are an intelligent AI assistant for {settings.get('user_name', 'the owner')}. Be natural, helpful, and human-like. Answer basic FAQs using this info: {settings.get('user_info', 'No info provided')}. Ask clarifying questions if needed. Set expectations like 'I'll note this down for {settings.get('user_name', 'the owner')}.' The user is busy, so handle initial queries."
         gpt_messages = [{'role': 'system', 'content': system_prompt}] + messages[-5:]
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-3.5-turbo",  # Changed to a stable model
             messages=gpt_messages,
             temperature=0.7
         )
@@ -30,7 +30,7 @@ def analyze_importance(messages: list, settings: dict, num_exchanges: int) -> di
             'Low': 'Escalate if urgency is medium or higher, or any negative sentiment, or complex.',
             'Medium': 'Escalate if urgency high, or strong negative/positive sentiment, or complex after 2-3 exchanges.',
             'High': 'Escalate only if urgency high and keywords present, or very negative sentiment.'
-        }[settings['importance_threshold']]
+        }.get(settings.get('importance_threshold', 'Medium'), 'Escalate if urgency high or strong negative sentiment.')
         analysis_prompt = f"""
         Analyze this conversation:
         {conv_text}
@@ -45,7 +45,7 @@ def analyze_importance(messages: list, settings: dict, num_exchanges: int) -> di
         Output as JSON: {{"sentiment_score": float, "urgency": "low/medium/high", "intent": "str", "complex": bool, "escalate": bool}}
         """
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-3.5-turbo",
             messages=[{'role': 'user', 'content': analysis_prompt}],
             temperature=0.0,
             response_format={"type": "json_object"}
@@ -58,7 +58,7 @@ def analyze_importance(messages: list, settings: dict, num_exchanges: int) -> di
 def generate_summary(conv_text: str) -> str:
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-3.5-turbo",
             messages=[{'role': 'user', 'content': f"Provide a concise summary of this conversation: {conv_text}"}],
             temperature=0.7
         )
@@ -70,7 +70,7 @@ def generate_summary(conv_text: str) -> str:
 def generate_key_points(conv_text: str) -> str:
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-3.5-turbo",
             messages=[{'role': 'user', 'content': f"Extract 2-3 key points as bullet points: {conv_text}"}],
             temperature=0.7
         )
@@ -82,7 +82,7 @@ def generate_key_points(conv_text: str) -> str:
 def generate_suggested_action(conv_text: str) -> str:
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-3.5-turbo",
             messages=[{'role': 'user', 'content': f"Suggest an action for the user: {conv_text}"}],
             temperature=0.7
         )

@@ -12,109 +12,62 @@ async def get_conn():
     return redis  # Return the global Redis client
 
 async def get_user_settings(user_id: int) -> dict:
-    # Fix: Use consistent key pattern - either "users:{user_id}" or "user:{user_id}"
-    data = await redis.hgetall(f"user:{user_id}")
+    data = await redis.hgetall(f"users:{user_id}")
     if not data:
-        # Try the other pattern for backward compatibility
-        data = await redis.hgetall(f"users:{user_id}")
-    return data
+        return {}
+    return data  # Return as is since values are already strings
 
-async def update_user_setting(user_id: int, key_or_dict: str | dict, value=None) -> None:
-    # Fix: Use consistent key pattern
-    key = f"user:{user_id}"
-    
-    if isinstance(key_or_dict, dict):
-        # Handle dictionary input
-        for k, v in key_or_dict.items():
-            await redis.hset(key, k, str(v))
-    elif value is not None:
-        # Handle key-value pair
-        await redis.hset(key, key_or_dict, str(value))
+async def update_user_setting(user_id: int, key_or_dict: str | dict | None, value=None) -> None:
+    key = f"users:{user_id}"
+    if key_or_dict is None and value is None:
+        await redis.delete(key)  # Clear all settings
+    elif isinstance(key_or_dict, dict):
+        await redis.hset(key, **key_or_dict)
+    elif value is not None and key_or_dict is not None:
+        await redis.hset(key, key_or_dict, value)
     else:
-        # Handle deletion
+        # Handle single key deletion if value is None
         await redis.hdel(key, key_or_dict)
-    
-    # Set expiration to prevent memory leaks
-    await redis.expire(key, 30 * 24 * 3600)  # 30 days
+    await redis.expire(key, 2592000)  # 30 days
 
 async def get_conversation(user_id: int) -> dict:
     data = await redis.hgetall(f"conversations:{user_id}")
     if not data:
         return {}
-    
-    result = {}
-    for k, v in data.items():
-        if k in ['conversation', 'state']:
-            try:
-                result[k] = json.loads(v)
-            except json.JSONDecodeError:
-                result[k] = v
-        else:
-            result[k] = v
-    
-    return result
+    return {
+        k: json.loads(v) if k in ['conversation', 'state'] else v
+        for k, v in data.items()
+    }
 
 async def save_conversation(user_id: int, data: dict) -> None:
     key = f"conversations:{user_id}"
-    
-    # Prepare data for storage
-    storage_data = {}
-    for k, v in data.items():
-        if k in ['conversation', 'state']:
-            storage_data[k] = json.dumps(v)
-        else:
-            storage_data[k] = str(v)
-    
-    # Store all fields
-    if storage_data:
-        await redis.hset(key, mapping=storage_data)
-    
-    # Set expiration (24 hours for conversations)
-    await redis.expire(key, 24 * 3600)
+    await redis.hset(key, **{
+        'conversation': json.dumps(data.get('conversation', [])),
+        'escalated': str(data.get('escalated', '0')),
+        'owner_id': str(data.get('owner_id', '')),
+        'state': json.dumps(data.get('state', '')),
+        'started_at': str(data.get('started_at', datetime.now().timestamp()))
+    })
+    await redis.expire(key, 86400)  # 24 hours
 
 async def is_busy(user_id: int) -> bool:
     settings = await get_user_settings(user_id)
     return settings.get('busy', '0') == '1'
 
 async def get_user_settings_by_username(username: str) -> dict:
-    # Scan for user keys with both patterns using KEYS command (for Upstash Redis)
-    patterns = ["user:*", "users:*"]
-    
-    for pattern in patterns:
-        keys = await redis.keys(pattern)
-        for key in keys:
-            try:
-                user_id_str = key.split(':')[1]
-                settings = await get_user_settings(int(user_id_str))
-                if settings.get('username') == username:
-                    return settings
-            except (IndexError, ValueError, Exception) as e:
-                continue
+    async for key in redis.scan_iter(match="users:*"):
+        settings = await get_user_settings(int(key.decode('utf-8').split(':')[1]))
+        if settings.get('username') == username:
+            return settings
     return {}
 
 async def clean_old_convs(max_age_hours: int = 24) -> int:
-    """
-    Remove conversations older than max_age_hours.
-    Returns the number of deleted conversations.
-    """
     deleted_count = 0
     cutoff_time = datetime.now().timestamp() - (max_age_hours * 3600)
-    
-    # Use KEYS instead of SCAN for Upstash Redis
-    keys = await redis.keys("conversations:*")
-    
-    for key in keys:
-        try:
-            # Extract user_id from key
-            user_id_str = key.split(':')[1]
-            conv_data = await get_conversation(int(user_id_str))
-            started_at = float(conv_data.get('started_at', 0))
-            if started_at < cutoff_time:
-                await redis.delete(key)
-                deleted_count += 1
-        except (ValueError, KeyError, Exception) as e:
-            # Delete corrupted conversations
-            await redis.delete(key)
+    async for key in redis.scan_iter(match="conversations:*"):
+        conv_data = await get_conversation(int(key.decode('utf-8').split(':')[1]))
+        started_at = float(conv_data.get('started_at', 0))
+        if started_at < cutoff_time:
+            await redis.delete(key.decode('utf-8'))
             deleted_count += 1
-    
     return deleted_count

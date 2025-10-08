@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext  # Added CallbackContext
 from db import get_user_settings, update_user_setting, get_conversation, save_conversation, is_busy, get_user_settings_by_username
 from ai import generate_ai_response, analyze_importance, generate_summary, generate_key_points, generate_suggested_action
 import logging
@@ -26,7 +26,6 @@ async def start(update: Update, context: CallbackContext) -> None:
                 'user_name': '',
                 'user_info': ''
             }
-            # Use the correct update_user_setting function with dict
             await update_user_setting(user_id, initial_settings)
             logger.info(f"Created new user {user_id}")
         
@@ -71,186 +70,120 @@ async def available(update: Update, context: CallbackContext) -> None:
 
 async def set_auto_reply(update: Update, context: CallbackContext) -> None:
     try:
-        user_id = update.effective_user.id
         if not context.args:
-            await update.message.reply_text("Please provide a reply message. Usage: /set_auto_reply <message>")
+            await update.message.reply_text("Please provide a reply message, e.g., /set_auto_reply Hi, I'm busy.")
             return
-        reply_message = " ".join(context.args)
-        await update_user_setting(user_id, 'auto_reply', reply_message)
-        await update.message.reply_text(f"Auto-reply set to: {reply_message}")
+        user_id = update.effective_user.id
+        reply = ' '.join(context.args)
+        await update_user_setting(user_id, 'auto_reply', reply)
+        await update.message.reply_text(f"Auto reply set to: {reply}")
     except Exception as e:
-        logger.error(f"Error in set_auto_reply: {e}", exc_info=True)
-        await update.message.reply_text("Failed to set auto-reply. Please try again.")
+        logger.error(f"Error in set_auto_reply command: {e}", exc_info=True)
+        await update.message.reply_text("Failed to set auto reply. Please try again.")
 
 async def set_threshold(update: Update, context: CallbackContext) -> None:
     try:
-        user_id = update.effective_user.id
-        if not context.args or len(context.args) != 1 or context.args[0] not in ['Low', 'Medium', 'High']:
-            await update.message.reply_text("Please provide a valid threshold. Usage: /set_threshold <Low/Medium/High>")
+        if not context.args or context.args[0].lower() not in ['low', 'medium', 'high']:
+            await update.message.reply_text("Please specify 'Low', 'Medium', or 'High', e.g., /set_threshold Medium")
             return
-        threshold = context.args[0]
+        user_id = update.effective_user.id
+        threshold = context.args[0].capitalize()
         await update_user_setting(user_id, 'importance_threshold', threshold)
         await update.message.reply_text(f"Importance threshold set to: {threshold}")
     except Exception as e:
-        logger.error(f"Error in set_threshold: {e}", exc_info=True)
+        logger.error(f"Error in set_threshold command: {e}", exc_info=True)
         await update.message.reply_text("Failed to set threshold. Please try again.")
 
 async def set_keywords(update: Update, context: CallbackContext) -> None:
     try:
-        user_id = update.effective_user.id
         if not context.args:
-            await update.message.reply_text("Please provide keywords. Usage: /set_keywords <word1,word2,...>")
+            await update.message.reply_text("Please provide keywords separated by commas, e.g., /set_keywords urgent,help")
             return
-        keywords = ",".join(context.args)
+        user_id = update.effective_user.id
+        keywords = ','.join(context.args)
         await update_user_setting(user_id, 'keywords', keywords)
         await update.message.reply_text(f"Keywords set to: {keywords}")
     except Exception as e:
-        logger.error(f"Error in set_keywords: {e}", exc_info=True)
+        logger.error(f"Error in set_keywords command: {e}", exc_info=True)
         await update.message.reply_text("Failed to set keywords. Please try again.")
 
 async def add_schedule_handler(update: Update, context: CallbackContext) -> None:
     try:
-        user_id = update.effective_user.id
-        if not context.args or len(context.args) != 3:
-            await update.message.reply_text("Usage: /add_schedule <days> <start> <end> (e.g., Mon-Fri 09:00 17:00)")
+        if len(context.args) != 3:
+            await update.message.reply_text("Usage: /add_schedule <days> <start_time> <end_time>, e.g., /add_schedule weekdays 09:00 17:00")
             return
-        days, start_time, end_time = context.args
-        schedule = f"{days} {start_time}-{end_time}"
-        await update_user_setting(user_id, 'schedule', schedule)
-        await update.message.reply_text(f"Schedule set to: {schedule}")
+        days, start, end = context.args
+        user_id = update.effective_user.id
+        # Placeholder for schedule logic - to be implemented with db.py
+        await update.message.reply_text(f"Schedule set: {days} from {start} to {end} (implementation pending)")
     except Exception as e:
-        logger.error(f"Error in add_schedule_handler: {e}", exc_info=True)
+        logger.error(f"Error in add_schedule command: {e}", exc_info=True)
         await update.message.reply_text("Failed to set schedule. Please try again.")
 
 async def set_name(update: Update, context: CallbackContext) -> None:
     try:
-        user_id = update.effective_user.id
-        if not context.args or len(context.args) != 1:
-            await update.message.reply_text("Usage: /set_name <name>")
+        if not context.args:
+            await update.message.reply_text("Please provide a name, e.g., /set_name John Doe")
             return
-        name = context.args[0]
+        user_id = update.effective_user.id
+        name = ' '.join(context.args)
         await update_user_setting(user_id, 'user_name', name)
         await update.message.reply_text(f"Name set to: {name}")
     except Exception as e:
-        logger.error(f"Error in set_name: {e}", exc_info=True)
+        logger.error(f"Error in set_name command: {e}", exc_info=True)
         await update.message.reply_text("Failed to set name. Please try again.")
 
 async def set_user_info(update: Update, context: CallbackContext) -> None:
     try:
-        user_id = update.effective_user.id
         if not context.args:
-            await update.message.reply_text("Usage: /set_user_info <info>")
+            await update.message.reply_text("Please provide info, e.g., /set_user_info I am an AI developer")
             return
-        info = " ".join(context.args)
+        user_id = update.effective_user.id
+        info = ' '.join(context.args)
         await update_user_setting(user_id, 'user_info', info)
         await update.message.reply_text(f"User info set to: {info}")
     except Exception as e:
-        logger.error(f"Error in set_user_info: {e}", exc_info=True)
+        logger.error(f"Error in set_user_info command: {e}", exc_info=True)
         await update.message.reply_text("Failed to set user info. Please try again.")
 
 async def deactivate(update: Update, context: CallbackContext) -> None:
     try:
         user_id = update.effective_user.id
-        settings = await get_user_settings(user_id)
-        if not settings:
-            await update.message.reply_text("You are not registered as an owner.")
-            return
-        
-        # Store current auto_reply for cancellation
-        current_auto_reply = settings.get('auto_reply', '')
-        await update_user_setting(user_id, 'auto_reply_backup', current_auto_reply)
-        await update_user_setting(user_id, 'auto_reply', "DEACTIVATE_PENDING")
-        
-        await update.message.reply_text("Are you sure you want to deactivate? Reply 'YES' to confirm.")
+        if context.args and context.args[0].lower() == 'yes':
+            await update_user_setting(user_id, None, None)  # Clear all settings
+            await update.message.reply_text("Your account has been deactivated.")
+        else:
+            await update.message.reply_text("To deactivate, please type /deactivate YES")
     except Exception as e:
-        logger.error(f"Error in deactivate: {e}", exc_info=True)
-        await update.message.reply_text("Failed to process deactivation. Please try again.")
+        logger.error(f"Error in deactivate command: {e}", exc_info=True)
+        await update.message.reply_text("Failed to deactivate. Please try again.")
 
 async def test_as_contact(update: Update, context: CallbackContext) -> None:
     try:
         user_id = update.effective_user.id
-        await update.message.reply_text("Testing as contact: Simulating a contact message. Use /busy to enable AI handling.")
-        logger.info(f"Test as contact initiated by user {user_id}")
+        await update.message.reply_text("Testing as contact mode (placeholder).")
     except Exception as e:
-        logger.error(f"Error in test_as_contact: {e}", exc_info=True)
-        await update.message.reply_text("Test failed. Please try again.")
+        logger.error(f"Error in test_as_contact command: {e}", exc_info=True)
+        await update.message.reply_text("Failed to test as contact. Please try again.")
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
     try:
-        logger.info(f"Handling message from user {update.effective_user.id}: {update.message.text}")
         user_id = update.effective_user.id
-        settings = await get_user_settings(user_id)
-        if not settings:
-            await update.message.reply_text("You are not registered. Use /start to begin.")
-            return
-
-        # Handle deactivation confirmation
-        if settings.get('auto_reply') == "DEACTIVATE_PENDING" and update.message.text.strip().upper() == "YES":
-            from db import redis
-            await redis.delete(f"user:{user_id}")
-            await update.message.reply_text("You have been deactivated as an owner. Goodbye!")
-            return
-        elif settings.get('auto_reply') == "DEACTIVATE_PENDING":
-            # Restore original auto_reply
-            backup_reply = settings.get('auto_reply_backup', "Hi, this is the owner's AI assistant...")
-            await update_user_setting(user_id, 'auto_reply', backup_reply)
-            await update.message.reply_text("Deactivation cancelled.")
-            return
-
-        # Initialize conversation data
+        contact_name = update.effective_user.first_name or update.effective_user.username or 'Unknown'
+        link = f"tg://user?id={user_id}"
         conv = await get_conversation(user_id)
-        if not conv:
-            conv = {
-                'conversation': [],
-                'escalated': '0',
-                'owner_id': str(user_id),
-                'state': '',
-                'started_at': datetime.now().timestamp()
-            }
-            await save_conversation(user_id, conv)
-
-        # Set contact_name from the sender
-        contact_name = update.effective_user.first_name or update.effective_user.username or 'Unknown Contact'
-
-        # Define a default link
-        link = "https://t.me/switchtoAI_bot"
-
         messages = conv.get('conversation', [])
         escalated = conv.get('escalated', '0')
-        owner_id = conv.get('owner_id', str(user_id))
-        state = conv.get('state', '')
+        owner_id = conv.get('owner_id', user_id)
 
-        if state == 'ASK_OWNER':
-            text = update.message.text.strip()
-            if text.startswith('@'):
-                username = text[1:]
-                target_settings = await get_user_settings_by_username(username)
-                if target_settings:
-                    owner_id = target_settings.get('user_id', user_id)
-                    await save_conversation(user_id, {**conv, 'owner_id': owner_id, 'state': None})
-                    auto_reply = target_settings.get('auto_reply', "Hi, this is the owner's AI assistant...")
-                    await update.message.reply_text(auto_reply)
-                    return
-                else:
-                    await update.message.reply_text("Username not found. Try again.")
-                    return
-            else:
-                await update.message.reply_text("Please reply with @username.")
-                return
-
-        if not owner_id:
-            await update.message.reply_text("Error: No owner associated. Please start over.")
-            return
-
-        if not await is_busy(int(owner_id)):
-            await update.message.reply_text(f"Hi {contact_name}, the owner is currently available. Message sent: {update.message.text}")
+        if not await is_busy(owner_id):
+            logger.info(f"Owner {owner_id} is currently available. Message sent: {update.message.text}")
             return
 
         messages.append({'role': 'user', 'content': update.message.text})
         await save_conversation(user_id, {**conv, 'conversation': messages})
 
         owner_settings = await get_user_settings(int(owner_id))
-        # Fix: Provide default values for missing settings
         owner_settings.setdefault('user_name', 'Owner')
         owner_settings.setdefault('user_info', 'The owner is a professional who works on AI projects.')
         
