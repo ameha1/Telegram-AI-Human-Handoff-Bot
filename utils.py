@@ -4,6 +4,7 @@ from db import clean_old_convs
 
 logger = logging.getLogger(__name__)
 
+
 async def run_scheduler():
     """
     Run a scheduler to clean old conversations periodically with better error handling.
@@ -18,6 +19,6 @@ async def run_scheduler():
         except Exception as e:
             logger.error(f"Error in scheduler: {str(e)}", exc_info=True)
         
-        # Wait for 1 hour instead of 24 hours for more frequent cleanup
+        # Wait for 1 hour with smaller intervals for better shutdown responsiveness
         for _ in range(12):  # Check every 5 minutes for 1 hour
             await asyncio.sleep(300)  # 5 minutes

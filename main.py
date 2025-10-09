@@ -1,18 +1,13 @@
 import os
 import asyncio
 import logging
-from flask import Flask, request, render_template_string, abort
+from flask import Flask, request, jsonify
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, ContextTypes
 from dotenv import load_dotenv
 import threading
 import signal
 import sys
-import concurrent.futures
-import gevent.monkey
-
-# Apply gevent monkey patching at the start
-gevent.monkey.patch_all()
 
 load_dotenv()
 
@@ -34,10 +29,6 @@ app = Flask(__name__)
 application = None
 application_lock = threading.Lock()
 is_shutting_down = False
-app_initialized = False
-
-# Thread pool for async operations
-thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 async def initialize_app():
     """Initialize Telegram application properly"""
@@ -70,29 +61,28 @@ async def initialize_app():
 
 def initialize_application_sync():
     """Initialize application synchronously"""
-    global application, app_initialized
+    global application
     
     with application_lock:
-        if application is not None and app_initialized:
+        if application is not None:
             return application
             
         try:
-            # Use existing event loop
-            loop = asyncio.get_event_loop()
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             application = loop.run_until_complete(initialize_app())
-            app_initialized = True
             logger.info("Telegram application initialized and started successfully")
             return application
             
         except Exception as e:
             logger.error(f"Failed to initialize application: {str(e)}")
             application = None
-            app_initialized = False
             raise
 
 async def shutdown_application():
     """Shutdown application properly"""
-    global application, is_shutting_down, app_initialized
+    global application, is_shutting_down
     
     is_shutting_down = True
     if application:
@@ -105,52 +95,30 @@ async def shutdown_application():
             logger.error(f"Error during application shutdown: {e}")
         finally:
             application = None
-            app_initialized = False
 
 def signal_handler(signum, frame):
     """Handle graceful shutdown"""
     logger.info(f"Received signal {signum}, initiating graceful shutdown...")
     
-    global thread_pool
-    thread_pool.shutdown(wait=False)
-    
     # Schedule cleanup
     try:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(shutdown_application())
+        if application:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(shutdown_application())
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
+    sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
-
-def process_update_in_thread(data: dict, app: Application) -> bool:
-    """Process update in a separate thread with explicit event loop"""
-    try:
-        # Create a new event loop for this thread
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        update = Update.de_json(data, app.bot)
-        if update:
-            loop.run_until_complete(app.process_update(update))
-            logger.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
-            return True
-        else:
-            logger.error("Failed to parse Telegram update")
-            return False
-    except Exception as e:
-        logger.error(f"Error processing update: {str(e)}", exc_info=True)
-        return False
-    finally:
-        loop.close()  # Clean up the event loop
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     global application
     try:
         with application_lock:
-            if application is None or not app_initialized:
+            if application is None:
                 logger.info("Initializing application on webhook request...")
                 initialize_application_sync()
                 if application is None:
@@ -160,23 +128,25 @@ def webhook():
             data = request.get_json()
             if not data:
                 logger.error("No JSON data in webhook request")
-                abort(400)
+                return "Bad Request", 400
             
             logger.info(f"Received webhook data for update_id: {data.get('update_id', 'unknown')}")
             
-            # Process update directly in the main event loop
+            # Process update directly using the application's event loop
             update = Update.de_json(data, application.bot)
             if update:
-                # Use the existing event loop to process the update
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Schedule the processing without waiting
-                    asyncio.create_task(application.process_update(update))
+                # Use the application's running event loop to process the update
+                future = asyncio.run_coroutine_threadsafe(
+                    application.process_update(update), 
+                    application._loop
+                )
+                try:
+                    future.result(timeout=30)  # 30 second timeout
+                    logger.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
                     return '', 200
-                else:
-                    # Run directly if loop is not running
-                    loop.run_until_complete(application.process_update(update))
-                    return '', 200
+                except concurrent.futures.TimeoutError:
+                    logger.error("Update processing timed out")
+                    return 'Timeout', 408
             else:
                 logger.error("Failed to parse Telegram update")
                 return 'Error', 500
@@ -189,9 +159,10 @@ def webhook():
 def health():
     """Health check endpoint"""
     try:
-        # Test Redis connection in a separate thread
+        # Test Redis connection
         def test_redis():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             try:
                 conn = loop.run_until_complete(get_conn())
                 loop.run_until_complete(conn.ping())
@@ -199,41 +170,48 @@ def health():
             except Exception as e:
                 logger.error(f"Redis health check failed: {e}")
                 return False
+            finally:
+                loop.close()
         
-        redis_healthy = thread_pool.submit(test_redis).result(timeout=10.0)
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(test_redis)
+            redis_healthy = future.result(timeout=10.0)
         
-        return {
+        return jsonify({
             "status": "healthy" if redis_healthy else "unhealthy",
             "service": "Telegram AI Human Handoff Bot",
-            "application_initialized": app_initialized,
+            "application_initialized": application is not None,
             "shutting_down": is_shutting_down,
             "redis_connected": redis_healthy
-        }
+        })
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        return {
+        return jsonify({
             "status": "unhealthy",
             "error": str(e),
-            "application_initialized": app_initialized,
+            "application_initialized": application is not None,
             "shutting_down": is_shutting_down
-        }, 500
+        }), 500
 
 def start_scheduler():
     """Start the scheduler in a separate thread"""
     def run_scheduler_sync():
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            # Import here to avoid circular imports
             from utils import run_scheduler as run_scheduler_task
             loop.run_until_complete(run_scheduler_task())
         except Exception as e:
             logger.error(f"Scheduler error: {e}")
+        finally:
+            loop.close()
     
     scheduler_thread = threading.Thread(target=run_scheduler_sync, daemon=True)
     scheduler_thread.start()
     logger.info("Scheduler started")
 
-# Initialize application immediately for better reliability
+# Initialize application on startup
 def initialize_on_startup():
     """Initialize application when the app starts"""
     try:
@@ -251,3 +229,4 @@ if __name__ == '__main__':
     
     logger.info(f"Starting server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    

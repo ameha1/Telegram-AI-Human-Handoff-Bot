@@ -1,4 +1,6 @@
-from asyncio.log import logger
+
+import logging
+
 from upstash_redis.asyncio import Redis
 import os
 import json
@@ -8,6 +10,8 @@ from datetime import datetime, timedelta
 redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
 redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
 redis = Redis(url=redis_url, token=redis_token)
+
+logger = logging.getLogger(__name__)
 
 async def get_conn():
     return redis  # Return the global Redis client
@@ -67,27 +71,26 @@ async def clean_old_convs(max_age_hours: int = 24) -> int:
     cutoff_time = datetime.now().timestamp() - (max_age_hours * 3600)
     
     try:
-        # Get all conversation keys
-        keys = []
+        # Use SCAN command with cursor to get all conversation keys
         cursor = 0
         while True:
-            cursor, found_keys = await redis.scan(cursor, match="conversations:*", count=100)
-            keys.extend(found_keys)
+            cursor, keys = await redis.scan(cursor, match="conversations:*", count=100)
+            
+            for key in keys:
+                try:
+                    # Get the started_at field from the conversation
+                    started_at_str = await redis.hget(key, 'started_at')
+                    if started_at_str:
+                        started_at = float(started_at_str)
+                        if started_at < cutoff_time:
+                            await redis.delete(key)
+                            deleted_count += 1
+                except Exception as e:
+                    logger.error(f"Error processing key {key}: {e}")
+                    continue
+            
             if cursor == 0:
                 break
-        
-        # Check each conversation and delete if old
-        for key in keys:
-            try:
-                conv_data = await redis.hgetall(key)
-                if conv_data and 'started_at' in conv_data:
-                    started_at = float(conv_data['started_at'])
-                    if started_at < cutoff_time:
-                        await redis.delete(key)
-                        deleted_count += 1
-            except Exception as e:
-                logger.error(f"Error processing key {key}: {e}")
-                continue
                 
     except Exception as e:
         logger.error(f"Error in clean_old_convs: {e}")
