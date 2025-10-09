@@ -1,3 +1,4 @@
+from asyncio.log import logger
 from upstash_redis.asyncio import Redis
 import os
 import json
@@ -64,10 +65,31 @@ async def get_user_settings_by_username(username: str) -> dict:
 async def clean_old_convs(max_age_hours: int = 24) -> int:
     deleted_count = 0
     cutoff_time = datetime.now().timestamp() - (max_age_hours * 3600)
-    async for key in redis.scan_iter(match="conversations:*"):
-        conv_data = await get_conversation(int(key.decode('utf-8').split(':')[1]))
-        started_at = float(conv_data.get('started_at', 0))
-        if started_at < cutoff_time:
-            await redis.delete(key.decode('utf-8'))
-            deleted_count += 1
+    
+    try:
+        # Get all conversation keys
+        keys = []
+        cursor = 0
+        while True:
+            cursor, found_keys = await redis.scan(cursor, match="conversations:*", count=100)
+            keys.extend(found_keys)
+            if cursor == 0:
+                break
+        
+        # Check each conversation and delete if old
+        for key in keys:
+            try:
+                conv_data = await redis.hgetall(key)
+                if conv_data and 'started_at' in conv_data:
+                    started_at = float(conv_data['started_at'])
+                    if started_at < cutoff_time:
+                        await redis.delete(key)
+                        deleted_count += 1
+            except Exception as e:
+                logger.error(f"Error processing key {key}: {e}")
+                continue
+                
+    except Exception as e:
+        logger.error(f"Error in clean_old_convs: {e}")
+    
     return deleted_count

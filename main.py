@@ -164,21 +164,21 @@ def webhook():
             
             logger.info(f"Received webhook data for update_id: {data.get('update_id', 'unknown')}")
             
-            # Submit the update processing to thread pool
-            future = thread_pool.submit(process_update_in_thread, data, application)
-            
-            try:
-                # Wait for the result with timeout
-                success = future.result(timeout=25.0)  # 25 second timeout
-                if success:
+            # Process update directly in the main event loop
+            update = Update.de_json(data, application.bot)
+            if update:
+                # Use the existing event loop to process the update
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Schedule the processing without waiting
+                    asyncio.create_task(application.process_update(update))
                     return '', 200
                 else:
-                    return 'Error processing update', 500
-            except concurrent.futures.TimeoutError:
-                logger.error("Update processing timed out")
-                return 'Timeout', 408
-            except Exception as e:
-                logger.error(f"Error waiting for update processing: {str(e)}")
+                    # Run directly if loop is not running
+                    loop.run_until_complete(application.process_update(update))
+                    return '', 200
+            else:
+                logger.error("Failed to parse Telegram update")
                 return 'Error', 500
                 
     except Exception as e:

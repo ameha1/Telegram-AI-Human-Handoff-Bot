@@ -18,6 +18,6 @@ async def run_scheduler():
         except Exception as e:
             logger.error(f"Error in scheduler: {str(e)}", exc_info=True)
         
-        # Wait for 24 hours with periodic wake-ups to check for shutdown
-        for _ in range(24 * 12):  # Check every 5 minutes for 24 hours
+        # Wait for 1 hour instead of 24 hours for more frequent cleanup
+        for _ in range(12):  # Check every 5 minutes for 1 hour
             await asyncio.sleep(300)  # 5 minutes
