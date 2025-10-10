@@ -9,6 +9,8 @@ import threading
 import signal
 import sys
 import concurrent.futures
+import logging
+from logging.handlers import RotatingFileHandler
 
 load_dotenv()
 
@@ -120,37 +122,19 @@ def webhook():
     try:
         with application_lock:
             if application is None:
-                logger.info("Initializing application on webhook request...")
                 initialize_application_sync()
-                if application is None:
-                    logger.error("Application initialization failed after attempt")
-                    return "Service temporarily unavailable", 503
             
             data = request.get_json()
-            if not data:
-                logger.error("No JSON data in webhook request")
-                return "Bad Request", 400
-            
-            logger.info(f"Received webhook data for update_id: {data.get('update_id', 'unknown')}")
-            
-            # Process update directly using the application's event loop
             update = Update.de_json(data, application.bot)
+            
             if update:
-                # Use the application's running event loop to process the update
-                future = asyncio.run_coroutine_threadsafe(
-                    application.process_update(update), 
-                    application._loop
+                # Use thread-safe processing
+                loop = application._loop
+                asyncio.run_coroutine_threadsafe(
+                    application.process_update(update),
+                    loop
                 )
-                try:
-                    future.result(timeout=30)  # 30 second timeout
-                    logger.info(f"Processed update for chat {update.effective_chat.id if update.effective_chat else 'unknown'}")
-                    return '', 200
-                except concurrent.futures.TimeoutError:
-                    logger.error("Update processing timed out")
-                    return 'Timeout', 408
-            else:
-                logger.error("Failed to parse Telegram update")
-                return 'Error', 500
+                return '', 200
                 
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}", exc_info=True)
@@ -194,6 +178,16 @@ def health():
             "application_initialized": application is not None,
             "shutting_down": is_shutting_down
         }), 500
+
+def setup_logging():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            RotatingFileHandler('bot.log', maxBytes=10485760, backupCount=3),
+            logging.StreamHandler()
+        ]
+    )
 
 def start_scheduler():
     """Start the scheduler in a separate thread"""

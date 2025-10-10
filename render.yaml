@@ -2,16 +2,17 @@ services:
 - type: web
   name: telegram-ai-human-handoff-bot
   env: python
+  region: oregon  # Specify region for better latency
+  plan: free
   buildCommand: pip install -r requirements.txt
-  startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 --lifespan on
+  startCommand: gunicorn main:app --config gunicorn.conf.py --bind 0.0.0.0:$PORT
   envVars:
     - key: TELEGRAM_TOKEN
-      fromDatabase:
-        name: telegram-ai-human-handoff-bot
-        type: secret
-        dotEnvVar: TELEGRAM_TOKEN
+      sync: false
     - key: OPENAI_API_KEY
-      fromDatabase:
-        name: telegram-ai-human-handoff-bot
-        type: secret
-        dotEnvVar: OPENAI_API_KEY
+      sync: false
+    - key: UPSTASH_REDIS_REST_URL
+      sync: false
+    - key: UPSTASH_REDIS_REST_TOKEN
+      sync: false
+  healthCheckPath: /health

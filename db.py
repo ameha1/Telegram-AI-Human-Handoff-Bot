@@ -1,10 +1,12 @@
 
 import logging
 
-from upstash_redis.asyncio import Redis
 import os
 import json
 from datetime import datetime, timedelta
+import asyncio
+from upstash_redis.asyncio import Redis
+from upstash_redis import UpstashRedisException
 
 # Redis client initialization
 redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
@@ -13,14 +15,23 @@ redis = Redis(url=redis_url, token=redis_token)
 
 logger = logging.getLogger(__name__)
 
+redis = Redis(
+    url=redis_url, 
+    token=redis_token,
+    retries=3,
+    retry_interval=1
+)
+
 async def get_conn():
     return redis  # Return the global Redis client
 
 async def get_user_settings(user_id: int) -> dict:
-    data = await redis.hgetall(f"users:{user_id}")
-    if not data:
-        return {}
-    return data  # Return as is since values are already strings
+    try:
+        data = await redis.hgetall(f"users:{user_id}")
+        return data or {}
+    except UpstashRedisException as e:
+        logger.error(f"Redis error getting user settings for {user_id}: {e}")
+        return {}  # Return as is since values are already strings
 
 async def update_user_setting(user_id: int, key_or_dict: str | dict | None, value=None) -> None:
     key = f"users:{user_id}"

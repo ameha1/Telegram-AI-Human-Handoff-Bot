@@ -10,18 +10,24 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 def generate_ai_response(messages: list, settings: dict) -> str:
     try:
-        system_prompt = f"You are an intelligent AI assistant for {settings.get('user_name', 'the owner')}. Be natural, helpful, and human-like. Answer basic FAQs using this info: {settings.get('user_info', 'No info provided')}. Ask clarifying questions if needed. Set expectations like 'I'll note this down for {settings.get('user_name', 'the owner')}.' The user is busy, so handle initial queries."
-        gpt_messages = [{'role': 'system', 'content': system_prompt}] + messages[-5:]
+        system_prompt = f"""You are an intelligent AI assistant for {settings.get('user_name', 'the owner')}. 
+        Be natural, helpful, and human-like. Answer basic FAQs using this info: {settings.get('user_info', 'No info provided')}. 
+        Ask clarifying questions if needed. Set expectations like 'I'll note this down for {settings.get('user_name', 'the owner')}.' 
+        The user is busy, so handle initial queries. Keep responses concise and conversational."""
+        
+        # Keep last 10 messages for better context (increased from 5)
+        gpt_messages = [{'role': 'system', 'content': system_prompt}] + messages[-10:]
+        
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",  # Changed to a stable model
+            model="gpt-3.5-turbo",
             messages=gpt_messages,
-            temperature=0.7
+            temperature=0.7,
+            max_tokens=500  # Add token limit
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"Error generating AI response: {e}")
         return "I apologize, but I'm having trouble processing your request right now. Please try again later."
-
 def analyze_importance(messages: list, settings: dict, num_exchanges: int) -> dict:
     try:
         conv_text = '\n'.join([f"{msg['role']}: {msg['content']}" for msg in messages])
